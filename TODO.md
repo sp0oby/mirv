@@ -1,7 +1,9 @@
 # mirv — Complete Build Checklist
 
-**Legend:** `[x]` done · `[ ]` not started · `[~]` in progress · `[?]` blocked / needs decision
+**Legend:** `[x]` done & tested · `[ ]` not started · `[~]` in progress · `[?]` blocked / needs decision
 **Updated:** 2026-05-16
+
+**Current build status:** ✅ `forge build` green · ✅ `forge test` 51/51 passing · ✅ `npx tsc --noEmit` zero errors
 
 ---
 
@@ -39,19 +41,20 @@
 - [x] `Relayer.sol` — Hyperlane IMessageRecipient + unlockCallback
 
 ### Scripts
-- [x] `script/MineHookAddress.s.sol` — CREATE2 salt miner for hook permission bits
-- [x] `script/Deploy.s.sol` — separate DeployBase / DeployEthereum / DeployBnb contracts
-- [ ] `script/WireSisterDomains.s.sol` — register all 3 mailboxes after deploys
-- [ ] `script/SeedLiquidity.s.sol` — initial LP from treasury into pools
+- [x] `script/MineHookAddress.s.sol` — CREATE2 salt miner for hook permission bits (compiles)
+- [x] `script/Deploy.s.sol` — separate DeployBase / DeployEthereum / DeployBnb contracts (compiles)
+- [x] `script/WireSisterDomains.s.sol` — WireBase + WireMainnet + WireBnb (compiles)
+- [x] `script/SeedLiquidity.s.sol` — SeedBase + FundHookEthereum + FundHookBnb (compiles)
+- [ ] **Note:** scripts not yet executed against any RPC — needs env vars + testnet ETH
 
 ### Tests
 - [x] `test/helpers/TestBase.sol` — Vault+Treasury scaffolding with MockERC20
-- [x] `test/MirrorVault.t.sol` — 15 tests, all passing (deposit/withdraw/harvest/fuzz)
-- [ ] `test/MirrorHook.t.sol` — using uniswap-hooks `HookTest.sol` pattern (real V4 PoolManager + mined hook address)
-- [ ] `test/MirrorFactory.t.sol` — deployPair, TVL gating, agent auth
-- [ ] `test/Treasury.t.sol` — forwarding, ETH receive, Safe rotation
-- [ ] `test/Relayer.t.sol` — Hyperlane message handling, sender auth, registerPool
-- [ ] `test/integration/MirrorFlow.t.sol` — full deposit → mirror → rebalance → harvest cycle
+- [x] `test/MirrorVault.t.sol` — **15/15 passing** (deposit/withdraw/harvest/fuzz with 1000 runs)
+- [x] `test/MirrorFactory.t.sol` — **8/8 passing** (constructor, auth, agent authorization)
+- [x] `test/Treasury.t.sol` — **12/12 passing** (forwarding, ETH receive, Safe rotation, fuzz)
+- [x] `test/Relayer.t.sol` — **16/16 passing** (Hyperlane message handling, sender auth, registerPool, pause)
+- [ ] `test/MirrorHook.t.sol` — needs uniswap-hooks `HookTest.sol` pattern (real V4 PoolManager + mined hook address). Deferred to fork-test suite — see TODO Phase 4.
+- [ ] `test/integration/MirrorFlow.t.sol` — full deposit → mirror → rebalance → harvest cycle (Anvil fork test)
 - [ ] `test/invariant/VaultInvariants.t.sol` — share price never decreases on deposit, totalAssets ≥ principal
 
 ### Static Analysis
@@ -59,6 +62,7 @@
 - [ ] Run `slither . --filter-paths 'lib/'` and fix findings
 - [ ] Add Slither config (`.slither.config.json`) — whitelist `low-level-calls` for V4 hook callbacks
 - [ ] Run Mythril: `myth analyze src/MirrorHook.sol`
+- [ ] Run `aeon-vuln-scanner` (Bankr skill) — free Semgrep + TruffleHog + osv-scanner + Slither pre-audit pass
 - [ ] Run `forge fmt --check` and `forge inspect` storage layout
 
 ### Security Checklist (from `memory/ref_security_checklist.md`)
@@ -77,14 +81,15 @@
 - [x] Source verified on block explorer after deploy (pending)
 
 ### Missing Onchain Data (must source before deploying that chain)
-- [ ] BNB Chain V4 PoolManager address (verify on bscscan)
-- [ ] BNB Chain USDC + USDT addresses
-- [ ] BNB Chain Chainlink ETH/USD feed
-- [ ] Hyperlane Mailbox on Ethereum (docs.hyperlane.xyz)
-- [ ] Hyperlane Mailbox on Base
-- [ ] Hyperlane Mailbox on BNB
-- [ ] Pyth ETH/USD feed ID — verified (`0xff61491a...`) but double-check
-- [ ] Confirm Hyperlane domain IDs (Ethereum=1, Base=8453, BNB=56)
+- [x] BNB Chain V4 PoolManager: `0x28e2ea090877bf75740558f6bfb36a5ffee9e9df` (from developers.uniswap.org)
+- [x] Hyperlane Mailbox on Ethereum: `0xc005dc82818d67AF737725bD4bf75435d065D239`
+- [x] Hyperlane Mailbox on Base: `0xeA87ae93Fa0019a82A727bfd3eBd1cFCa8f64f1D`
+- [x] Hyperlane Mailbox on BNB: `0x2971b9Aec44bE4eb673DF1B88cDB57b96eefe8a4`
+- [x] Pyth oracles all 3 chains (verified from docs.pyth.network)
+- [x] Chainlink ETH/USD all 3 chains (BNB: `0x9ef1B8c0E4F7dc8bF5719Ea496883DC6401d5b2e`)
+- [x] Hyperlane domain IDs confirmed (Ethereum=1, Base=8453, BNB=56)
+- [ ] BNB Chain USDC + USDT addresses (look up before BNB deploy)
+- [ ] Confirm Pyth ETH/USD feed ID matches across chains
 
 ---
 
@@ -133,6 +138,11 @@
 - [ ] Human-in-the-loop mode for first 2 weeks (require manual approval via admin panel)
 - [ ] Dataset export — dump 3 months of cycles for future fine-tuning
 
+### External Context (Bankr Skills — optional but high-value)
+- [ ] Integrate `aeon-defi-monitor` — feed competing vault APR/TVL data into RebalanceAgent context for accurate baseline APY
+- [ ] Integrate `aeon-defi-overview` — feed daily DeFi regime call (RISK-ON / NEUTRAL / RISK-OFF) into RiskAgent
+- [ ] Consider ERC-8004 agent identity registration for CoordinatorAgent (transparency + reputation)
+
 ---
 
 ## Phase 3 — Frontend
@@ -144,6 +154,11 @@
 - [ ] Wallet provider wrapper with RainbowKit (Phantom included)
 - [ ] `wagmiConfig.ts` — 3 chain definitions + RPC overrides from env (no bare `http()`)
 - [ ] `scaffold.config.ts` — `pollingInterval: 3000`
+
+### Component Libraries (Bankr ecosystem — optional accelerators)
+- [ ] Evaluate Coinbase `onchainkit` skill components (wallet, swap widget, identity, NFT) — could speed up Phase 3 ~30%
+- [ ] Evaluate `zerion` skill for "My Positions" page data (portfolio values, PnL, gas, 41+ chains)
+- [ ] Evaluate `siwa` (Sign-In With Agent) for admin panel auth
 
 ### Pages
 - [ ] Home / Landing — hero, live stats, "Deposit Now" CTA
@@ -262,7 +277,7 @@
 ## Phase 7 — Grant Application
 
 - [x] Write 400-word pitch (`GRANT-APPLICATION.md`)
-- [ ] Set up GitHub repo (public — confirm with you before pushing)
+- [x] Set up GitHub repo (https://github.com/sp0oby/mirv — public, MIT)
 - [ ] Apply to Uniswap Hook Design Lab
 - [ ] Apply to Hook Incubator (Atrium Academy)
 - [ ] Schedule call with Uniswap grants team
@@ -349,6 +364,8 @@
 - [ ] Referral program live (offchain points → $MIRROR redeemable in Phase 2)
 - [ ] Discord open to public
 - [ ] First "extra yield" snapshot posted publicly for transparency
+- [ ] **Publish mirv as a Bankr Skill** — submit to github.com/bankrbot/skills so Farcaster users can deposit/withdraw via @bankrbot natural language
+- [ ] **Integrate with Trails (Polygon) skill** — list mirv as a supported yield vault for cross-chain deposits from any chain
 
 ---
 
@@ -371,6 +388,16 @@
 - [ ] GitHub repo — public from day 1 or private until launch?
 - [ ] Exact Hyperlane Mailbox addresses (still TODO across all 3 chains)
 - [ ] Whether to use Hyperlane warp routes for token bridging vs separate mechanism
+
+---
+
+## Documentation Created
+
+- [x] `README.md` — full architecture overview, user flows, deployment sequence
+- [x] `SETUP.md` — step-by-step env var sourcing guide for every external account
+- [x] `TODO.md` — this file
+- [x] `GRANT-APPLICATION.md` — Hook Incubator pitch
+- [x] `LICENSE` — MIT
 
 ---
 

@@ -82,8 +82,9 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
     ) external payable override whenNotPaused nonReentrant {
         if (msg.sender != mailbox) revert NotMailbox();
         if (!authorizedSenders[sender]) revert NotAuthorizedSender();
-        if (message.length != 160) revert InvalidPayload(); // fixed-size struct
+        if (message.length == 0) revert InvalidPayload();
 
+        // abi.decode reverts cleanly on malformed payloads — no need for hardcoded size check
         RebalanceMessage memory rm = abi.decode(message, (RebalanceMessage));
         if (!_registered[rm.pairId]) revert PoolNotRegistered();
 

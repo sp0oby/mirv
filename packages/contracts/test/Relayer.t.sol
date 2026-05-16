@@ -1,0 +1,174 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+
+import {Test} from "forge-std/Test.sol";
+import {Relayer} from "../src/Relayer.sol";
+import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+import {Currency} from "v4-core/src/types/Currency.sol";
+import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
+
+/// @notice Relayer access-control + message-validation tests.
+///         Full V4 modifyLiquidity execution tested via fork tests (TODO).
+contract RelayerTest is Test {
+    Relayer internal relayer;
+
+    address internal owner       = makeAddr("owner");
+    address internal mailbox     = makeAddr("mailbox");
+    address internal poolManager = makeAddr("poolManager");
+    address internal alice       = makeAddr("alice");
+    bytes32 internal sisterHook  = bytes32(uint256(uint160(makeAddr("sisterHook"))));
+    uint32  internal sisterDomain = 8453; // Base
+
+    function setUp() public {
+        relayer = new Relayer(poolManager, mailbox, owner);
+    }
+
+    // ─── Constructor ──────────────────────────────────────────────────────────
+
+    function test_constructorStoresArgs() public view {
+        assertEq(address(relayer.poolManager()), poolManager);
+        assertEq(relayer.mailbox(),              mailbox);
+        assertEq(relayer.owner(),                owner);
+    }
+
+    function test_constructorRevertsOnZeroPoolManager() public {
+        vm.expectRevert(Relayer.ZeroAddress.selector);
+        new Relayer(address(0), mailbox, owner);
+    }
+
+    function test_constructorRevertsOnZeroMailbox() public {
+        vm.expectRevert(Relayer.ZeroAddress.selector);
+        new Relayer(poolManager, address(0), owner);
+    }
+
+    // ─── Authorization ────────────────────────────────────────────────────────
+
+    function test_setAuthorizedSenderByOwner() public {
+        assertFalse(relayer.authorizedSenders(sisterHook));
+        vm.prank(owner);
+        relayer.setAuthorizedSender(sisterHook, true);
+        assertTrue(relayer.authorizedSenders(sisterHook));
+    }
+
+    function test_setAuthorizedSenderByNonOwnerReverts() public {
+        vm.expectRevert();
+        vm.prank(alice);
+        relayer.setAuthorizedSender(sisterHook, true);
+    }
+
+    function test_setMailboxByOwner() public {
+        address newMb = makeAddr("newMailbox");
+        vm.prank(owner);
+        relayer.setMailbox(newMb);
+        assertEq(relayer.mailbox(), newMb);
+    }
+
+    function test_setMailboxZeroReverts() public {
+        vm.expectRevert(Relayer.ZeroAddress.selector);
+        vm.prank(owner);
+        relayer.setMailbox(address(0));
+    }
+
+    // ─── handle() reverts ─────────────────────────────────────────────────────
+
+    function test_handleRevertsIfNotMailbox() public {
+        vm.expectRevert(Relayer.NotMailbox.selector);
+        vm.prank(alice);
+        relayer.handle(sisterDomain, sisterHook, "");
+    }
+
+    function test_handleRevertsIfSenderNotAuthorized() public {
+        vm.expectRevert(Relayer.NotAuthorizedSender.selector);
+        vm.prank(mailbox);
+        relayer.handle(sisterDomain, sisterHook, "");
+    }
+
+    function test_handleRevertsIfPayloadEmpty() public {
+        vm.prank(owner);
+        relayer.setAuthorizedSender(sisterHook, true);
+
+        vm.expectRevert(Relayer.InvalidPayload.selector);
+        vm.prank(mailbox);
+        relayer.handle(sisterDomain, sisterHook, "");
+    }
+
+    function test_handleRevertsOnMalformedPayload() public {
+        vm.prank(owner);
+        relayer.setAuthorizedSender(sisterHook, true);
+
+        // 4-byte payload is too short to decode — abi.decode reverts (no custom error)
+        vm.expectRevert();
+        vm.prank(mailbox);
+        relayer.handle(sisterDomain, sisterHook, hex"deadbeef");
+    }
+
+    function test_handleRevertsIfPoolNotRegistered() public {
+        vm.prank(owner);
+        relayer.setAuthorizedSender(sisterHook, true);
+
+        bytes memory payload = abi.encode(Relayer.RebalanceMessage({
+            pairId:           keccak256("unregistered"),
+            deltaToken0:      0,
+            deltaToken1:      0,
+            newFee:           3000,
+            tickLower:        -60,
+            tickUpper:        60,
+            minExpectedYield: 0
+        }));
+
+        vm.expectRevert(Relayer.PoolNotRegistered.selector);
+        vm.prank(mailbox);
+        relayer.handle(sisterDomain, sisterHook, payload);
+    }
+
+    function test_handleRevertsWhenPaused() public {
+        vm.prank(owner);
+        relayer.setAuthorizedSender(sisterHook, true);
+
+        vm.prank(owner);
+        relayer.pause();
+
+        vm.expectRevert();
+        vm.prank(mailbox);
+        relayer.handle(sisterDomain, sisterHook, "");
+    }
+
+    // ─── registerPool ─────────────────────────────────────────────────────────
+
+    function test_registerPoolByOwner() public {
+        PoolKey memory key = PoolKey({
+            currency0:   Currency.wrap(makeAddr("token0")),
+            currency1:   Currency.wrap(makeAddr("token1")),
+            fee:         3000,
+            tickSpacing: 60,
+            hooks:       IHooks(makeAddr("hook"))
+        });
+        bytes32 pairId = keccak256("test-pair");
+
+        vm.prank(owner);
+        relayer.registerPool(pairId, key);
+        // After registering, handle's "PoolNotRegistered" path is bypassed for this pairId
+        // (will fail later at the V4 modifyLiquidity step in a real fork test)
+    }
+
+    function test_registerPoolByNonOwnerReverts() public {
+        PoolKey memory key = PoolKey({
+            currency0:   Currency.wrap(makeAddr("token0")),
+            currency1:   Currency.wrap(makeAddr("token1")),
+            fee:         3000,
+            tickSpacing: 60,
+            hooks:       IHooks(makeAddr("hook"))
+        });
+        vm.expectRevert();
+        vm.prank(alice);
+        relayer.registerPool(keccak256("p"), key);
+    }
+
+    // ─── unlockCallback access control ────────────────────────────────────────
+
+    function test_unlockCallbackOnlyPoolManager() public {
+        vm.expectRevert(Relayer.NotMailbox.selector);
+        vm.prank(alice);
+        relayer.unlockCallback("");
+    }
+}
