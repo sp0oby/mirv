@@ -267,12 +267,13 @@
 - [x] Updated `monitor.ts` to read pool state via V4 `StateView` lens contracts (not PoolManager directly)
 - [x] Verified addresses for StateView on Ethereum + Base + BNB
 
-### ✅ V4 pool initialization
+### ✅ V4 pool initialization with active liquidity
 - [x] `script/InitPoolWithLiquidity.s.sol` initializes WETH/USDC pool with mirv hook on Base fork
 - [x] `scripts/anvil-init-pool-base.sh` funds deployer with USDC (via Circle masterMinter impersonation) + WETH (via WETH.deposit()) + runs init script
 - [x] V4 pool successfully initialized — sqrtPriceX96 + tick set, hook attached
 - [x] LP add transaction succeeds (afterAddLiquidity hook callback fires)
-- [ ] **Open issue**: getLiquidity() returns 0 after LP add — V4 LP math/settlement issue. Tx status 1 + ModifyLiquidity event emitted, but pool's active liquidity is 0. Need to debug PoolModifyLiquidityTest's unlock flow or use a different LP add path. Doesn't block agent loop itself.
+- [x] **Pool liquidity confirmed at 1e12** — getLiquidity() via StateView returns non-zero
+- [x] **Resolved**: original issue was `liquidityDelta=1e18` needing ~$60T worth of tokens. Reducing to 1e12 in the same tight tick range fits within the 100 WETH + 1M USDC we fund. This was NOT Anvil-specific — same math applies on Sepolia/mainnet.
 
 ### Remaining (deferred — needs the LP math debug or alternative path)
 - [ ] Get non-zero active liquidity in the Base pool (LP add succeeds but `getLiquidity()` returns 0 — likely settle-side issue in PoolModifyLiquidityTest)

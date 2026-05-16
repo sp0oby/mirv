@@ -8,6 +8,7 @@ import {Currency} from "v4-core/src/types/Currency.sol";
 import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {ModifyLiquidityParams} from "v4-core/src/types/PoolOperation.sol";
 import {PoolModifyLiquidityTest} from "v4-core/src/test/PoolModifyLiquidityTest.sol";
+import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {EnvHelpers} from "./lib/EnvHelpers.sol";
 
@@ -49,16 +50,20 @@ contract InitPoolWithLiquidityBase is Script {
         IERC20(WETH).approve(address(lp), type(uint256).max);
         IERC20(USDC).approve(address(lp), type(uint256).max);
 
-        // Narrow range straddling the current tick (~$3000/ETH → tick -196257).
-        // Range -200000 to -192000 = ~4% width. tickSpacing 60.
+        // Narrow range straddling the current tick (~$3000/ETH -> tick -196257).
+        // Range -200040 to -192180 = ~4% width. tickSpacing 60. Multiples of 60.
+        //
+        // L=1e12 is small enough that token0+token1 amounts fit comfortably
+        // within the 100 WETH + 1M USDC the script funds.
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower:      -200040, // multiple of 60
-            tickUpper:      -192180, // multiple of 60
-            liquidityDelta:  1e18,
+            tickLower:      -200040,
+            tickUpper:      -192180,
+            liquidityDelta:  1e12,
             salt:           bytes32(0)
         });
-        lp.modifyLiquidity(key, params, "");
-        console2.log("Liquidity added: 1e18 units in tight range");
+        BalanceDelta delta = lp.modifyLiquidity(key, params, "");
+        console2.log("LP add delta amount0:", int256(delta.amount0()));
+        console2.log("LP add delta amount1:", int256(delta.amount1()));
 
         vm.stopBroadcast();
     }
