@@ -1,4 +1,10 @@
 import "dotenv/config";
+
+// Force unbuffered stdout/stderr — critical for `nohup agent > log &` workflows
+// (otherwise Node block-buffers writes to a pipe/file and the log appears empty)
+if ((process.stdout as any)._handle?.setBlocking) (process.stdout as any)._handle.setBlocking(true);
+if ((process.stderr as any)._handle?.setBlocking) (process.stderr as any)._handle.setBlocking(true);
+
 import { buildGraph }      from "./graph.js";
 import { disconnectRedis } from "./tools/redis.js";
 import type { MirrorState } from "./state.js";

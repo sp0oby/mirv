@@ -1,14 +1,6 @@
-import { ChatAnthropic } from "@langchain/anthropic";
-import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { callClaude } from "../llm.js";
 import { REBALANCE_PROMPT } from "../prompts/loader.js";
 import type { MirrorState, RebalanceProposal } from "../state.js";
-
-const llm = new ChatAnthropic({
-  model: "claude-opus-4-7",
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  temperature: 0,
-  maxTokens: 1024,
-});
 
 export async function runRebalanceAgent(state: MirrorState): Promise<Partial<MirrorState>> {
   const monitors = Object.values(state.monitorResults);
@@ -19,7 +11,6 @@ export async function runRebalanceAgent(state: MirrorState): Promise<Partial<Mir
   }
 
   const totalTvl = monitors.reduce((sum, m) => sum + m.localDepthUsd, 0);
-
   const prompt = `Monitor results from this cycle:
 ${JSON.stringify(monitors, null, 2)}
 
@@ -28,23 +19,21 @@ Max single move: 2% = $${(totalTvl * 0.02).toLocaleString()}
 
 Calculate the optimal rebalance. Consider all three chains.
 Estimate amounts in token units (USDC has 6 decimals, WETH has 18 decimals).
-Output the RebalanceProposal JSON.`;
-
-  const response = await llm.invoke([
-    new SystemMessage(REBALANCE_PROMPT),
-    new HumanMessage(prompt),
-  ]);
-
-  const content = typeof response.content === "string"
-    ? response.content
-    : JSON.stringify(response.content);
+Output the RebalanceProposal JSON only — no other text.`;
 
   let parsed: RebalanceProposal;
   try {
-    const match = content.match(/\{[\s\S]*\}/);
-    parsed = JSON.parse(match?.[0] ?? content) as RebalanceProposal;
-  } catch {
-    parsed = { action: "none", reasoning: `Parse error in rebalance response: ${content.slice(0, 200)}` };
+    const response = await callClaude({
+      system:     REBALANCE_PROMPT,
+      user:       prompt,
+      maxTokens:  1024,
+      agentLabel: "rebalance",
+    });
+    const match = response.match(/\{[\s\S]*\}/);
+    parsed = JSON.parse(match?.[0] ?? response) as RebalanceProposal;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    parsed = { action: "none", reasoning: `Rebalance error: ${msg.slice(0, 150)}` };
   }
 
   return { rebalanceProposal: parsed };

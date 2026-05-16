@@ -255,10 +255,29 @@
 - [x] End-to-end verified: Base hook → Dispatch event → daemon → MockMailbox.deliver → Relayer.handle reached
 - [x] Try/catch in deliver() captures application-layer reverts as `DeliveryFailed` events (relay keeps running)
 
-### Remaining (deferred to follow-up sessions)
-- [ ] Run LangGraph agents against local fork (needs ANTHROPIC_API_KEY in .env — 2-min user setup)
-- [ ] Observe at least one full Monitor → Rebalance → Risk → Coordinator cycle locally
-- [ ] Initialize a sister pool on Mainnet/BNB forks so Relayer can actually execute (not just receive) rebalances
+### ✅ Agent loop running against local fork
+- [x] Switched LLM from `claude-opus-4-7` → `claude-sonnet-4-6` (much cheaper, plenty smart for JSON tasks)
+- [x] Bypassed langchain's `top_p: -1` default-args bug by using raw `@anthropic-ai/sdk` directly
+- [x] Built `src/llm.ts` helper with `callClaude` (text→text) + `callClaudeWithTools` (multi-round tool calling)
+- [x] All 4 agents (Monitor/Rebalance/Coordinator/Risk) refactored off langchain ChatAnthropic onto raw SDK
+- [x] Confirmed Claude is being invoked: tool calls + multi-round responses + token counts logged
+- [x] Made Redis truly optional — agents degrade gracefully when `REDIS_URL` is a placeholder
+- [x] Added `scripts/redis.sh up/down/status` for local Docker Redis if user wants history tracking
+- [x] Forced synchronous stdout in `index.ts` so `nohup agent > log &` actually streams (no buffering)
+- [x] Updated `monitor.ts` to read pool state via V4 `StateView` lens contracts (not PoolManager directly)
+- [x] Verified addresses for StateView on Ethereum + Base + BNB
+
+### ✅ V4 pool initialization
+- [x] `script/InitPoolWithLiquidity.s.sol` initializes WETH/USDC pool with mirv hook on Base fork
+- [x] `scripts/anvil-init-pool-base.sh` funds deployer with USDC (via Circle masterMinter impersonation) + WETH (via WETH.deposit()) + runs init script
+- [x] V4 pool successfully initialized — sqrtPriceX96 + tick set, hook attached
+- [x] LP add transaction succeeds (afterAddLiquidity hook callback fires)
+- [ ] **Open issue**: getLiquidity() returns 0 after LP add — V4 LP math/settlement issue. Tx status 1 + ModifyLiquidity event emitted, but pool's active liquidity is 0. Need to debug PoolModifyLiquidityTest's unlock flow or use a different LP add path. Doesn't block agent loop itself.
+
+### Remaining (deferred — needs the LP math debug or alternative path)
+- [ ] Get non-zero active liquidity in the Base pool (LP add succeeds but `getLiquidity()` returns 0 — likely settle-side issue in PoolModifyLiquidityTest)
+- [ ] Initialize sister pools on Mainnet/BNB forks with same hook (needs hook to exist at matching CREATE2 addresses on each chain — already done) + funded relayers
+- [ ] Observe at least one full Monitor → Rebalance → Risk → Coordinator → dispatchRebalance → Mock Hyperlane → Relayer.handle cycle with real depth-driven imbalance
 - [ ] Add ETH Sepolia + BNB testnet deploy scripts (V4 may not be on BNB testnet — verify)
 - [ ] Note: user's `.env` has stale `PYTH_ADDRESS_BNB` (`0xD7aC...`) — should update to verified `0x4D7E825f80bDf85e913E0DD2A2D54927e9dE1594`
 
