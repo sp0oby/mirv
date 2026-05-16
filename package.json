@@ -1,0 +1,24 @@
+{
+  "name": "mirv",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/agents",
+    "packages/frontend"
+  ],
+  "scripts": {
+    "agents": "yarn workspace @mirror/agents dev",
+    "frontend": "yarn workspace @mirror/frontend dev",
+    "build": "yarn workspaces run build",
+    "test:contracts": "cd packages/contracts && forge test -vvv",
+    "slither": "cd packages/contracts && slither . --filter-paths 'lib/' --triage-mode"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sp0oby/mirv.git"
+  },
+  "license": "MIT"
+}

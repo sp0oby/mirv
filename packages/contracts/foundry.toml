@@ -1,0 +1,46 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc = "0.8.26"
+optimizer = true
+optimizer_runs = 200
+evm_version = "cancun"
+via_ir = true
+
+remappings = [
+    "uniswap-hooks/=lib/uniswap-hooks/",
+    "@uniswap/v4-core/=lib/uniswap-hooks/lib/v4-core/",
+    "@uniswap/v4-periphery/=lib/uniswap-hooks/lib/v4-periphery/",
+    "v4-core/=lib/uniswap-hooks/lib/v4-core/",
+    "v4-periphery/=lib/uniswap-hooks/lib/v4-periphery/",
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "forge-std/=lib/forge-std/src/",
+    "permit2/=lib/uniswap-hooks/lib/v4-periphery/lib/permit2/",
+    "solmate/=lib/uniswap-hooks/lib/v4-core/lib/solmate/",
+]
+
+[profile.default.fuzz]
+runs = 1000
+max_test_rejects = 65536
+seed = "0xdeadbeef"
+
+[profile.default.invariant]
+runs = 256
+depth = 15
+
+[profile.ci]
+fuzz = { runs = 5000 }
+invariant = { runs = 1000 }
+
+[rpc_endpoints]
+mainnet    = "${ALCHEMY_MAINNET_URL}"
+base       = "${ALCHEMY_BASE_URL}"
+bnb        = "${ALCHEMY_BNB_URL}"
+base_sep   = "${ALCHEMY_BASE_SEPOLIA_URL}"
+eth_sep    = "${ALCHEMY_ETH_SEPOLIA_URL}"
+
+[etherscan]
+mainnet = { key = "${ETHERSCAN_API_KEY}",  url = "https://api.etherscan.io/api" }
+base    = { key = "${BASESCAN_API_KEY}",   url = "https://api.basescan.org/api" }
+bnb     = { key = "${BSCSCAN_API_KEY}",    url = "https://api.bscscan.com/api" }
