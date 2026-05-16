@@ -3,7 +3,7 @@
 **Legend:** `[x]` done & tested · `[ ]` not started · `[~]` in progress · `[?]` blocked / needs decision
 **Updated:** 2026-05-16
 
-**Current build status:** ✅ `forge build` green · ✅ `forge test` 60/60 passing (incl. 9 fork tests) · ✅ `npx tsc --noEmit` zero errors · ✅ 3-chain Anvil deploy + wire works
+**Current build status:** ✅ `forge build` green · ✅ `forge test` **70/70** passing · ✅ `tsc` zero errors · ✅ 3-chain Anvil deploy + wire + cross-chain mock relay works
 
 ---
 
@@ -238,14 +238,29 @@
 - [x] `scripts/testnet-deploy-base-sepolia.sh` — Base Sepolia testnet deploy with --verify
 - [x] Testnet addresses for V4, Hyperlane, Pyth, Chainlink added to `.env.example`
 
+### ✅ V4 swap callback validation (proven via real Base mainnet fork)
+- [x] `test/integration/HookCallback.t.sol` — 4/4 tests pass
+- [x] Initialized new V4 pool on Base fork with our hook
+- [x] Added liquidity via `PoolModifyLiquidityTest` → `afterAddLiquidity` callback fires ✓
+- [x] Triggered real swap via `PoolSwapTest` → `afterSwap` callback fires ✓
+- [x] Agent `dispatchRebalance` → `RebalanceDispatched` event emits ✓
+- [x] Unauthorized agent reverts with `NotAuthorizedAgent` ✓
+
+### ✅ Mock Hyperlane cross-chain delivery (full message flow proven)
+- [x] `src/mocks/MockHyperlaneMailbox.sol` — IMailbox impl with try/catch deliver + diagnostic events
+- [x] `script/DeployMockMailboxes.s.sol` — per-chain deployer scripts
+- [x] `scripts/anvil-deploy-cross-chain.sh` — single-command setup: 3 forks + mock mailboxes + mirv contracts + wire
+- [x] `scripts/mock-hyperlane-relay.sh` — bash daemon watching Dispatch events on each fork, calling deliver() on destinations (bash 3.2 compatible)
+- [x] `test/MockHyperlaneMailbox.t.sol` — 6/6 isolated unit tests
+- [x] End-to-end verified: Base hook → Dispatch event → daemon → MockMailbox.deliver → Relayer.handle reached
+- [x] Try/catch in deliver() captures application-layer reverts as `DeliveryFailed` events (relay keeps running)
+
 ### Remaining (deferred to follow-up sessions)
-- [ ] Trigger a real swap on Base fork via V4 SwapRouter → observe `afterSwap` hook callback fire (requires SwapRouter setup or direct PoolManager.unlock)
-- [ ] Mock or stub Hyperlane delivery between forks (real Hyperlane relayers don't run locally — need MockMailbox forwarder)
-- [ ] Manually dispatch a rebalance from Base hook → cross-chain → Relayer.handle on Mainnet/BNB
-- [ ] Run the LangGraph agent loop against the local fork (set `ALCHEMY_BASE_URL=http://localhost:8546` — needs ANTHROPIC_API_KEY)
+- [ ] Run LangGraph agents against local fork (needs ANTHROPIC_API_KEY in .env — 2-min user setup)
 - [ ] Observe at least one full Monitor → Rebalance → Risk → Coordinator cycle locally
-- [ ] Add ETH Sepolia + BNB testnet deploy scripts (V4 may not be on BNB testnet — needs verification)
-- [ ] Note: user's `.env` has stale `PYTH_ADDRESS_BNB` (`0xD7aC...`) — should update to verified `0x4D7E...`
+- [ ] Initialize a sister pool on Mainnet/BNB forks so Relayer can actually execute (not just receive) rebalances
+- [ ] Add ETH Sepolia + BNB testnet deploy scripts (V4 may not be on BNB testnet — verify)
+- [ ] Note: user's `.env` has stale `PYTH_ADDRESS_BNB` (`0xD7aC...`) — should update to verified `0x4D7E825f80bDf85e913E0DD2A2D54927e9dE1594`
 
 ---
 
