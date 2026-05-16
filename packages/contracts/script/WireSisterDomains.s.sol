@@ -4,6 +4,7 @@ pragma solidity 0.8.26;
 import {Script, console2} from "forge-std/Script.sol";
 import {MirrorHook} from "../src/MirrorHook.sol";
 import {Relayer} from "../src/Relayer.sol";
+import {EnvHelpers} from "./lib/EnvHelpers.sol";
 
 // WireSisterDomains
 // Run AFTER all 3 chains have been deployed. Registers each chain's hooks as
@@ -22,7 +23,7 @@ uint32 constant DOMAIN_BNB      = 56;
 // ─── Base ─────────────────────────────────────────────────────────────────────
 contract WireBase is Script {
     function run() external {
-        uint256 ownerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        uint256 ownerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
 
         MirrorHook hook = MirrorHook(payable(vm.envAddress("MIRROR_HOOK_BASE")));
         bytes32 relayerEth = bytes32(uint256(uint160(vm.envAddress("RELAYER_MAINNET"))));
@@ -42,7 +43,7 @@ contract WireBase is Script {
 // ─── Ethereum mainnet ─────────────────────────────────────────────────────────
 contract WireMainnet is Script {
     function run() external {
-        uint256 ownerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        uint256 ownerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
 
         MirrorHook hook    = MirrorHook(payable(vm.envAddress("MIRROR_HOOK_MAINNET")));
         Relayer    relayer = Relayer(payable(vm.envAddress("RELAYER_MAINNET")));
@@ -72,7 +73,7 @@ contract WireMainnet is Script {
 // ─── BNB Chain ────────────────────────────────────────────────────────────────
 contract WireBnb is Script {
     function run() external {
-        uint256 ownerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        uint256 ownerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
 
         MirrorHook hook    = MirrorHook(payable(vm.envAddress("MIRROR_HOOK_BNB")));
         Relayer    relayer = Relayer(payable(vm.envAddress("RELAYER_BNB")));

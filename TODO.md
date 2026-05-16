@@ -3,7 +3,7 @@
 **Legend:** `[x]` done & tested · `[ ]` not started · `[~]` in progress · `[?]` blocked / needs decision
 **Updated:** 2026-05-16
 
-**Current build status:** ✅ `forge build` green · ✅ `forge test` 51/51 passing · ✅ `npx tsc --noEmit` zero errors
+**Current build status:** ✅ `forge build` green · ✅ `forge test` 60/60 passing (incl. 9 fork tests) · ✅ `npx tsc --noEmit` zero errors · ✅ 3-chain Anvil deploy + wire works
 
 ---
 
@@ -208,18 +208,44 @@
 - [x] Deploy script auto-substitutes placeholder TREASURY_SAFE / AGENT_WALLET with deployer for local test
 - [x] Deployed to mined address `0xD42Ca5083f67e39F43b9189Da6b2Dd6859a9C540` (lower 14 bits = 0x540, correct perms)
 
-### Remaining (next iterations)
-- [ ] Fund deployer with USDC via `anvil_setStorageAt` (balance slot manipulation) for full deposit test
-- [ ] Trigger a real swap on Base V4 pool → observe `afterSwap` hook callback fire
-- [ ] Spin up 3 forks in parallel (ethereum + base + bnb) for cross-chain simulation
-- [ ] Deploy Relayer on Ethereum + BNB forks
-- [ ] Mock or stub Hyperlane delivery between forks (real Hyperlane relayers don't run locally)
-- [ ] Wire sister domains across forks via `WireSisterDomains.s.sol`
-- [ ] Make a test deposit via cast (after USDC funding)
-- [ ] Manually dispatch a rebalance and verify Relayer.handle is called
-- [ ] Run the LangGraph agent loop against the local fork (set `ALCHEMY_BASE_URL=http://localhost:8546`)
+### ✅ Multi-chain Anvil orchestration
+- [x] `scripts/anvil-mainnet.sh` — Ethereum fork on port 8545
+- [x] `scripts/anvil-bnb.sh` — BNB Chain fork on port 8547
+- [x] `scripts/anvil-all.sh` — spins up all 3 forks in parallel
+- [x] `scripts/anvil-stop.sh` — clean shutdown
+- [x] `scripts/anvil-deploy-all.sh` — deploys all contracts across 3 chains in one command
+- [x] All chain addresses driven from `.env` (Deploy.s.sol reads via vm.envAddress)
+- [x] CREATE2 hook mining works on all 3 chains (Base: 0xD42…C540, ETH: 0xDbE…8540, BNB: 0xF42…0540)
+- [x] `scripts/anvil-wire-sisters.sh` — wires sister domains + authorized senders across 3 chains
+- [x] Verified: each hook tracks 2 sister domains; Ethereum + BNB relayers trust the Base hook
+
+### ✅ Vault lifecycle test (full deposit → harvest cycle on Base fork)
+- [x] USDC funding via Circle masterMinter impersonation (`scripts/test-full-flow.sh`)
+- [x] 10k USDC deposit → 10k mirvETH-USDC shares minted
+- [x] Agent reports 500 USDC cross-chain yield via `updateCrossChainAssets`
+- [x] Set baseline APY 5% via `updateBaselineApy`
+- [x] Fast-forward 1 day via `evm_increaseTime`
+- [x] `harvest()` mints performance fee shares to treasury (~74.5 USDC → 72.77 shares ✓)
+- [x] All math validates against expected formula
+
+### ✅ Fork integration test suite (CI-runnable, no external Anvil)
+- [x] `test/integration/ForkBase.t.sol` — 9/9 passing in 1.6s
+- [x] Tests against real Base V4 PoolManager bytecode via `vm.createFork`
+- [x] Validates hook permissions match deployed address bits
+- [x] Tests vault deposit, cross-chain reporting, harvest, treasury forwarding
+
+### ✅ Testnet deploy scaffolding
+- [x] `scripts/testnet-deploy-base-sepolia.sh` — Base Sepolia testnet deploy with --verify
+- [x] Testnet addresses for V4, Hyperlane, Pyth, Chainlink added to `.env.example`
+
+### Remaining (deferred to follow-up sessions)
+- [ ] Trigger a real swap on Base fork via V4 SwapRouter → observe `afterSwap` hook callback fire (requires SwapRouter setup or direct PoolManager.unlock)
+- [ ] Mock or stub Hyperlane delivery between forks (real Hyperlane relayers don't run locally — need MockMailbox forwarder)
+- [ ] Manually dispatch a rebalance from Base hook → cross-chain → Relayer.handle on Mainnet/BNB
+- [ ] Run the LangGraph agent loop against the local fork (set `ALCHEMY_BASE_URL=http://localhost:8546` — needs ANTHROPIC_API_KEY)
 - [ ] Observe at least one full Monitor → Rebalance → Risk → Coordinator cycle locally
-- [ ] Write `test/integration/Fork.t.sol` — in-process `vm.createFork` test (alternative to external Anvil)
+- [ ] Add ETH Sepolia + BNB testnet deploy scripts (V4 may not be on BNB testnet — needs verification)
+- [ ] Note: user's `.env` has stale `PYTH_ADDRESS_BNB` (`0xD7aC...`) — should update to verified `0x4D7E...`
 
 ---
 
