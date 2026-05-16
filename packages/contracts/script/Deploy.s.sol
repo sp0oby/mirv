@@ -12,6 +12,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {Currency} from "v4-core/src/types/Currency.sol";
 import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
+import {EnvHelpers} from "./lib/EnvHelpers.sol";
 
 /// @title Deploy
 /// @notice Foundry deployment script for mirv contracts.
@@ -46,7 +47,7 @@ contract DeployBase is Script {
     // address constant MAILBOX_BASE = 0x...; // fetch from https://docs.hyperlane.xyz
 
     function run() external {
-        uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        uint256 deployerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
         address deployer    = vm.addr(deployerKey);
         address safe        = vm.envAddress("TREASURY_SAFE");
         address mailbox     = vm.envAddress("HYPERLANE_MAILBOX_BASE");
@@ -109,7 +110,7 @@ contract DeployEthereum is Script {
     address constant PYTH_MAINNET       = 0x4305FB66699C3B2702D4d05CF36551390A4c69C6;
 
     function run() external {
-        uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        uint256 deployerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
         address deployer    = vm.addr(deployerKey);
         address safe        = vm.envAddress("TREASURY_SAFE");
         address mailbox     = vm.envAddress("HYPERLANE_MAILBOX_MAINNET");
@@ -154,7 +155,7 @@ contract DeployBnb is Script {
     function run() external {
         require(POOL_MANAGER != address(0), "Deploy: BNB Pool Manager not verified yet");
 
-        uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        uint256 deployerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
         address deployer    = vm.addr(deployerKey);
         address mailbox     = vm.envAddress("HYPERLANE_MAILBOX_BNB");
         bytes32 hookSalt    = bytes32(vm.envUint("HOOK_SALT_BNB"));
