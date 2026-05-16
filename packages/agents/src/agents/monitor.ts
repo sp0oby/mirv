@@ -39,6 +39,46 @@ const chainlinkAbi = parseAbi([
   "function decimals() view returns (uint8)",
 ]);
 
+const erc20Abi = parseAbi([
+  "function decimals() view returns (uint8)",
+  "function symbol() view returns (string)",
+]);
+
+// ─── V4 TVL math (universal — works on any chain with a V4 PoolManager) ─────
+//
+// V4 pool state gives us (sqrtPriceX96, liquidity at current tick). For a
+// concentrated liquidity AMM, the active token amounts at the current price are:
+//
+//   amount0 ≈ L / sqrtPrice    (in raw token0 units)
+//   amount1 ≈ L * sqrtPrice    (in raw token1 units)
+//
+// where sqrtPrice = sqrtPriceX96 / 2^96 (in token1/token0 ratio).
+// Convert to USD via Chainlink prices for each token.
+const Q96 = 2 ** 96;
+function estimatePoolTvl(opts: {
+  sqrtPriceX96:   bigint;
+  liquidity:      bigint;
+  token0Decimals: number;
+  token1Decimals: number;
+  token0PriceUsd: number;
+  token1PriceUsd: number;
+}): { tvlUsd: number; amount0: number; amount1: number } {
+  if (opts.liquidity === 0n) return { tvlUsd: 0, amount0: 0, amount1: 0 };
+
+  // sqrtPrice as Number — fine for estimates (concrete trades read raw integers on-chain)
+  const sqrtPrice = Number(opts.sqrtPriceX96) / Q96;
+  const L         = Number(opts.liquidity);
+
+  const amount0Raw = L / sqrtPrice;
+  const amount1Raw = L * sqrtPrice;
+
+  const amount0 = amount0Raw / 10 ** opts.token0Decimals;
+  const amount1 = amount1Raw / 10 ** opts.token1Decimals;
+
+  const tvlUsd = amount0 * opts.token0PriceUsd + amount1 * opts.token1PriceUsd;
+  return { tvlUsd, amount0, amount1 };
+}
+
 // ─── Anthropic tool schemas ───────────────────────────────────────────────────
 const tools: Anthropic.Messages.Tool[] = [
   {
@@ -83,10 +123,32 @@ const toolHandlers: Record<string, (input: any) => Promise<unknown>> = {
     ));
 
     try {
-      const [slot0, liquidity] = await Promise.all([
+      // Read pool state + both token decimals + ETH/USD price in parallel.
+      // Assume token1 is a stablecoin (USDC) at $1 — robust enough for ETH/USDC.
+      // Future: read both prices from Chainlink for non-stable pairs.
+      const chainlinkFeed = chain === "bnb"
+        ? (process.env.CHAINLINK_ETH_USD_BNB ?? "")
+        : (process.env[`CHAINLINK_ETH_USD_${chain === "ethereum" ? "MAINNET" : "BASE"}`] ?? "");
+
+      const [slot0, liquidity, dec0, dec1, clRound, clDecimals] = await Promise.all([
         client.readContract({ address: stateView, abi: stateViewAbi, functionName: "getSlot0",     args: [poolId] }),
         client.readContract({ address: stateView, abi: stateViewAbi, functionName: "getLiquidity", args: [poolId] }),
+        client.readContract({ address: token0 as Address, abi: erc20Abi, functionName: "decimals" }),
+        client.readContract({ address: token1 as Address, abi: erc20Abi, functionName: "decimals" }),
+        client.readContract({ address: chainlinkFeed as Address, abi: chainlinkAbi, functionName: "latestRoundData" }),
+        client.readContract({ address: chainlinkFeed as Address, abi: chainlinkAbi, functionName: "decimals" }),
       ]);
+
+      const ethUsd = Number(clRound[1]) / 10 ** Number(clDecimals);
+      const tvl = estimatePoolTvl({
+        sqrtPriceX96:   slot0[0],
+        liquidity:      liquidity,
+        token0Decimals: Number(dec0),
+        token1Decimals: Number(dec1),
+        token0PriceUsd: ethUsd,  // assumes token0 = WETH-like
+        token1PriceUsd: 1,       // assumes token1 = USDC-like
+      });
+
       return {
         chain,
         poolId,
@@ -94,13 +156,18 @@ const toolHandlers: Record<string, (input: any) => Promise<unknown>> = {
         tick:         slot0[1],
         fee:          slot0[3],
         liquidity:    liquidity.toString(),
+        token0:       { decimals: Number(dec0), priceUsd: ethUsd },
+        token1:       { decimals: Number(dec1), priceUsd: 1 },
+        depthUsd:     Math.round(tvl.tvlUsd),
+        amount0:      tvl.amount0,
+        amount1:      tvl.amount1,
       };
     } catch (err) {
-      // Pool likely not initialized on this chain — return zeros so the agent reports depth=0
       return {
         chain, poolId,
         sqrtPriceX96: "0", tick: 0, fee: feeTier, liquidity: "0",
-        note: "Pool not initialized on this chain (getSlot0 reverted)",
+        depthUsd: 0,
+        note: `Pool read failed: ${err instanceof Error ? err.message.slice(0, 100) : "?"}`,
       };
     }
   },
@@ -132,17 +199,35 @@ export async function runMonitorAgent(
     ? (process.env.CHAINLINK_ETH_USD_BNB ?? "")
     : (process.env[`CHAINLINK_ETH_USD_${chain === "ethereum" ? "MAINNET" : "BASE"}`] ?? "");
 
-  const prompt = `Monitor the ETH/USDC pool on ${chain}.
-Hook address: ${hookAddress}
-Chainlink ETH/USD feed: ${chainlinkFeed}
-V4 fee tier: 3000, tick spacing: 60
-Tokens: ETH = 0x4200000000000000000000000000000000000006 (Base) or 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 (Ethereum mainnet) — use the chain-appropriate WETH
-USDC: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 (Base) or 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 (Ethereum mainnet)
+  // Chain-appropriate token addresses (currency0 must be < currency1 for V4)
+  const tokens: Record<Chain, { token0: string; token1: string; }> = {
+    ethereum: { token0: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", token1: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" }, // USDC < WETH on mainnet
+    base:     { token0: "0x4200000000000000000000000000000000000006", token1: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" }, // WETH < USDC on Base
+    bnb:      { token0: "0x55d398326f99059fF775485246999027B3197955", token1: "0x2170Ed0880ac9A755fd29B2688956BD959F933F8" }, // USDT < ETH-bep
+  };
 
-Read the pool state via getPoolState. Read the current price via getChainlinkPrice.
-Estimate depth in USD (liquidity × price-per-unit). If pool returns 0 liquidity, depth = 0.
-Compare with previously reported sister depths (0 if unknown).
-Output the MonitorResult JSON only — no other text.`;
+  const t = tokens[chain];
+  const prompt = `Monitor the ETH/USDC pool on ${chain}.
+
+Pool parameters:
+- token0: ${t.token0}
+- token1: ${t.token1}
+- fee:    3000 (0.3%)
+- tickSpacing: 60
+- hook:   ${hookAddress}
+
+CALL getPoolState({chain: "${chain}", token0: "${t.token0}", token1: "${t.token1}", feeTier: 3000, tickSpacing: 60, hookAddress: "${hookAddress}"})
+The tool returns depthUsd (already computed via V4 TVL math). Use this directly — DO NOT recompute.
+
+If depthUsd is non-zero, treat this chain as having real liquidity.
+If depthUsd is 0 (pool not initialized or no liquidity), report localDepthUsd: 0 and treat as needing attention if other chains have depth.
+
+Compare with previously reported sister depths (0 if unknown). Flag actionNeeded=true if any of:
+- imbalance > 3% (max sister depth differs from min by >3%)
+- price drift > 2%
+- This chain has depth but a sister has 0 (or vice versa)
+
+Output ONLY a MonitorResult JSON, no other text.`;
 
   let parsed: MonitorResult;
   try {
