@@ -275,12 +275,23 @@
 - [x] **Pool liquidity confirmed at 1e12** — getLiquidity() via StateView returns non-zero
 - [x] **Resolved**: original issue was `liquidityDelta=1e18` needing ~$60T worth of tokens. Reducing to 1e12 in the same tight tick range fits within the 100 WETH + 1M USDC we fund. This was NOT Anvil-specific — same math applies on Sepolia/mainnet.
 
-### Remaining (deferred — needs the LP math debug or alternative path)
-- [ ] Get non-zero active liquidity in the Base pool (LP add succeeds but `getLiquidity()` returns 0 — likely settle-side issue in PoolModifyLiquidityTest)
-- [ ] Initialize sister pools on Mainnet/BNB forks with same hook (needs hook to exist at matching CREATE2 addresses on each chain — already done) + funded relayers
+### Remaining (deferred — last mile of the local demo)
+- [x] ~~Get non-zero active liquidity in the Base pool~~ — L=1e12 confirmed at `getLiquidity()`
+- [ ] **Tune pool depth for meaningful TVL** — L=1e12 = ~$0 (Claude correctly reports near-zero depth). L=1e16 needs more tokens than we fund (100 WETH + 1M USDC). Real demo needs either (a) much larger token funding (~1B WETH equivalent on the fork via anvil_setStorageAt for whale impersonation) OR (b) custom getPoolState math that maps V4 liquidity to a synthetic "demo TVL". Not Anvil-specific — same math on Sepolia.
+- [ ] Initialize sister pools on Mainnet/BNB forks with the same hook (their hook addresses already deployed — need full LP setup per chain)
 - [ ] Observe at least one full Monitor → Rebalance → Risk → Coordinator → dispatchRebalance → Mock Hyperlane → Relayer.handle cycle with real depth-driven imbalance
 - [ ] Add ETH Sepolia + BNB testnet deploy scripts (V4 may not be on BNB testnet — verify)
-- [ ] Note: user's `.env` has stale `PYTH_ADDRESS_BNB` (`0xD7aC...`) — should update to verified `0x4D7E825f80bDf85e913E0DD2A2D54927e9dE1594`
+- [ ] Update user's `.env` stale `PYTH_ADDRESS_BNB` (`0xD7aC...`) → verified `0x4D7E825f80bDf85e913E0DD2A2D54927e9dE1594`
+
+### Verified working in Phase 4 (proven this session)
+- [x] **Claude API actually being invoked** — was completely silent due to langchain `top_p: -1` bug. Fixed via raw Anthropic SDK. Token counts logged per call.
+- [x] **Multi-round tool calling** — Claude calls `getPoolState` + `getChainlinkPrice` tools, gets results, generates final JSON.
+- [x] **3 parallel monitor agents** running on 3 chains simultaneously via `Promise.allSettled`
+- [x] **Conditional routing** — when no monitor flags actionNeeded, cycle skips Rebalance/Risk/Coordinator → straight to record. When any flags it, cycle continues.
+- [x] **Pool initialization on Base fork** with mined hook → afterAddLiquidity callback fires → `getLiquidity()` returns L=1e12
+- [x] **StateView lens reads** — getSlot0 + getLiquidity work against Base fork
+- [x] **Graceful Redis degradation** — agent prints `[Redis] REDIS_URL not configured` and continues without crashing
+- [x] **Synchronous stdout** — nohup background runs now actually stream output (forced via `_handle.setBlocking(true)`)
 
 ---
 

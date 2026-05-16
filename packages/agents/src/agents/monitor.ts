@@ -158,6 +158,7 @@ Output the MonitorResult JSON only — no other text.`;
 
     const match = response.match(/\{[\s\S]*\}/);
     parsed = JSON.parse(match?.[0] ?? response) as MonitorResult;
+    console.log(`  [monitor:${chain}] depth=$${parsed.localDepthUsd?.toFixed(0) ?? 'NaN'} imbalance=${parsed.imbalancePct?.toFixed(2) ?? 'NaN'}% action=${parsed.actionNeeded}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     parsed = {
