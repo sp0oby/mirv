@@ -416,6 +416,37 @@
 - [ ] Agent wallet balance monitor — alert at <0.05 ETH per chain
 - [ ] Hook ETH balance monitor — alert at <0.01 ETH (for Hyperlane fees)
 
+### Agent operating cost auto-replenishment (x402 proxy)
+**Goal:** Agents call Claude paying USDC per request, treasury auto-tops-up agent wallet from performance fees. No human ever buys API credits manually.
+
+Pattern:
+```
+mirv agent → x402 proxy (claude-proxy.mirv.xyz) → Anthropic API
+                  ↑
+        USDC on Base, paid per-call
+                  ↓
+        proxy holds CC-funded Anthropic key + Coinbase Commerce off-ramp
+                  ↑
+        Treasury → AGENT_WALLET top-up cron (when balance < threshold)
+```
+
+- [ ] Set up Cloudflare Worker / Vercel Function at `claude-proxy.<domain>` that:
+  - Holds an Anthropic API key (funded via Coinbase Commerce → credit card auto-reload)
+  - Implements x402 HTTP 402 challenge/response (USDC on Base)
+  - Forwards paid requests to `api.anthropic.com`
+  - Refs: https://x402.org, https://github.com/coinbase/x402
+- [ ] Update `src/llm.ts` to add `X-PAYMENT` header with USDC tx hash (~5 LOC, optional flag)
+- [ ] Top-up cron: when `AGENT_WALLET` balance on Base < $50, transfer $200 from Treasury Gnosis Safe
+- [ ] Alternative: explore Bankr's `bankr-x402-sdk-dev` to skip building the proxy (they may add Claude support per request)
+- [ ] Phase 11 stretch: when Anthropic + OpenAI ship native crypto billing, remove the proxy entirely
+
+**Cost analysis (today):**
+- Sonnet 4.6 per cycle: ~$0.005 (4 Claude calls @ ~1.2K input + 0.3K output)
+- 45s cycle → 1920 cycles/day → ~$9.60/day → ~$290/month
+- Treasury 15% performance fee on $100k extra annual yield = $15k/year = $1250/month
+- Margin: ~$960/month after agent ops (using Sonnet)
+- Opus 4.7 (5× cost): ~$1450/month ops — only marginally profitable until TVL scales
+
 ---
 
 ## Phase 9 — Mainnet Launch
