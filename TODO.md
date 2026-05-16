@@ -287,11 +287,22 @@
 - [x] **Claude API actually being invoked** — was completely silent due to langchain `top_p: -1` bug. Fixed via raw Anthropic SDK. Token counts logged per call.
 - [x] **Multi-round tool calling** — Claude calls `getPoolState` + `getChainlinkPrice` tools, gets results, generates final JSON.
 - [x] **3 parallel monitor agents** running on 3 chains simultaneously via `Promise.allSettled`
-- [x] **Conditional routing** — when no monitor flags actionNeeded, cycle skips Rebalance/Risk/Coordinator → straight to record. When any flags it, cycle continues.
+- [x] **Conditional routing** — when no monitor flags actionNeeded, cycle skips Rebalance/Risk/Coordinator → straight to record. When any flags it, RebalanceAgent fires.
 - [x] **Pool initialization on Base fork** with mined hook → afterAddLiquidity callback fires → `getLiquidity()` returns L=1e12
-- [x] **StateView lens reads** — getSlot0 + getLiquidity work against Base fork
+- [x] **StateView lens reads** — getSlot0 + getLiquidity work against Base fork (with correct checksums)
 - [x] **Graceful Redis degradation** — agent prints `[Redis] REDIS_URL not configured` and continues without crashing
 - [x] **Synchronous stdout** — nohup background runs now actually stream output (forced via `_handle.setBlocking(true)`)
+- [x] **Universal V4 TVL math** — `(sqrtPriceX96, liquidity, decimals, Chainlink price) → USD TVL`. Works on any chain with V4 + Chainlink. Verified by reading real Ethereum mainnet ETH/USDC pool from the Anvil fork: $72,539 TVL.
+- [x] **Full Monitor → Rebalance flow proven** — agents detect imbalance, Claude correctly reasons about whether to act:
+  - Ethereum mainnet pool: $72,539 (real V4)
+  - Base test pool: $95 (L=1e12)
+  - BNB: $0 (no pool)
+  - RebalanceAgent recognizes anomalous data and returns `action: "none"` — correct safety behavior
+- [x] **Address checksum bug** — viem requires EIP-55 checksums; StateView/PoolManager addresses fixed.
+
+### Remaining for "all 4 agents firing in one cycle"
+- [ ] Set up comparable pools on all 3 chains so the rebalance proposal isn't anomalous
+- [ ] OR add a demo-mode flag to the rebalance prompt that forces minimum proposals when imbalance > X%
 
 ---
 
