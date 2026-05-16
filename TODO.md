@@ -197,25 +197,29 @@
 
 ## Phase 4 — Local Testing (Anvil)
 
-- [ ] Install Anvil (comes with Foundry — `anvil --version`)
-- [ ] Spin up 3 forks in parallel:
-  ```bash
-  anvil --fork-url $ALCHEMY_MAINNET_URL --port 8545 &
-  anvil --fork-url $ALCHEMY_BASE_URL    --port 8546 &
-  anvil --fork-url $ALCHEMY_BNB_URL     --port 8547 &
-  ```
-- [ ] Deploy MirrorHook via mining + CREATE2 on each Anvil fork
-- [ ] Deploy MirrorVault + Factory + Treasury on Base fork
+### ✅ Base single-chain deployment (proven working)
+- [x] Anvil 1.6.0 installed (ships with Foundry)
+- [x] `scripts/anvil-base.sh` — spins up Base fork on port 8546 (foreground or background)
+- [x] `scripts/anvil-deploy-base.sh` — full one-command flow: anvil → fund → mine hook → deploy → verify
+- [x] CREATE2 hook mining works (use canonical `0x4e59...4956C` deployer, NOT EOA)
+- [x] All 5 contracts deploy successfully against real Base V4 PoolManager on fork
+- [x] Cast verification: hook permissions, vault name/symbol/asset, perf fee, agent auth — all correct
+- [x] `EnvHelpers.sol` library handles private keys with or without `0x` prefix
+- [x] Deploy script auto-substitutes placeholder TREASURY_SAFE / AGENT_WALLET with deployer for local test
+- [x] Deployed to mined address `0xD42Ca5083f67e39F43b9189Da6b2Dd6859a9C540` (lower 14 bits = 0x540, correct perms)
+
+### Remaining (next iterations)
+- [ ] Fund deployer with USDC via `anvil_setStorageAt` (balance slot manipulation) for full deposit test
+- [ ] Trigger a real swap on Base V4 pool → observe `afterSwap` hook callback fire
+- [ ] Spin up 3 forks in parallel (ethereum + base + bnb) for cross-chain simulation
 - [ ] Deploy Relayer on Ethereum + BNB forks
-- [ ] Mock Hyperlane Mailbox locally OR use a real testnet messenger
-- [ ] Wire sister domains across forks
-- [ ] Authorize a local test agent wallet
-- [ ] Fund hooks with test ETH (`anvil_setBalance`)
-- [ ] Make a test deposit via cast
-- [ ] Simulate a big swap on Base fork → observe imbalance event
-- [ ] Manually dispatch a rebalance and verify it flows
-- [ ] Run the LangGraph agent loop against forks (point Alchemy URLs at localhost)
+- [ ] Mock or stub Hyperlane delivery between forks (real Hyperlane relayers don't run locally)
+- [ ] Wire sister domains across forks via `WireSisterDomains.s.sol`
+- [ ] Make a test deposit via cast (after USDC funding)
+- [ ] Manually dispatch a rebalance and verify Relayer.handle is called
+- [ ] Run the LangGraph agent loop against the local fork (set `ALCHEMY_BASE_URL=http://localhost:8546`)
 - [ ] Observe at least one full Monitor → Rebalance → Risk → Coordinator cycle locally
+- [ ] Write `test/integration/Fork.t.sol` — in-process `vm.createFork` test (alternative to external Anvil)
 
 ---
 
