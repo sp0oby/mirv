@@ -53,6 +53,7 @@ Output the CoordinatorDecision JSON only — no other text.`;
     });
     const match = response.match(/\{[\s\S]*\}/);
     decision = JSON.parse(match?.[0] ?? response) as CoordinatorDecision;
+    console.log(`  [coordinator] approved=${decision.approved} executeNow=${decision.executeNow} reasoning="${(decision.reasoning ?? '').slice(0, 80)}"`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {

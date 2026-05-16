@@ -22,11 +22,11 @@ const POOL_MANAGERS: Record<string, Address> = {
   bnb:      "0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF",
 };
 
-// V4 StateView lens contracts — getSlot0/getLiquidity are external view here, not on PoolManager
+// V4 StateView lens contracts — checksums verified via `cast to-check-sum-address`
 const STATE_VIEWS: Record<string, Address> = {
-  ethereum: "0x7ffE42C4a5DEeA5b0feC41C94C136Cf115597227",
-  base:     "0xa3c0C9B65baD0b08107Aa264b0f3dB444b867A71",
-  bnb:      "0xD13Dd3D6E93f276FAfc9Db9E6BB47C1180aee0c4",
+  ethereum: "0x7fFE42C4a5DEeA5b0feC41C94C136Cf115597227",
+  base:     "0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71",
+  bnb:      "0xd13Dd3D6E93f276FAfc9Db9E6BB47C1180aeE0c4",
 };
 
 const stateViewAbi = parseAbi([
@@ -149,7 +149,7 @@ const toolHandlers: Record<string, (input: any) => Promise<unknown>> = {
         token1PriceUsd: 1,       // assumes token1 = USDC-like
       });
 
-      return {
+      const result = {
         chain,
         poolId,
         sqrtPriceX96: slot0[0].toString(),
@@ -162,12 +162,16 @@ const toolHandlers: Record<string, (input: any) => Promise<unknown>> = {
         amount0:      tvl.amount0,
         amount1:      tvl.amount1,
       };
+      console.log(`  [tool:getPoolState:${chain}] liquidity=${liquidity} tvl=$${result.depthUsd}`);
+      return result;
     } catch (err) {
+      const msg = err instanceof Error ? err.message : "?";
+      console.log(`  [tool:getPoolState:${chain}] FAILED — ${msg.slice(0, 120)}`);
       return {
         chain, poolId,
         sqrtPriceX96: "0", tick: 0, fee: feeTier, liquidity: "0",
         depthUsd: 0,
-        note: `Pool read failed: ${err instanceof Error ? err.message.slice(0, 100) : "?"}`,
+        note: `Pool read failed: ${msg.slice(0, 100)}`,
       };
     }
   },

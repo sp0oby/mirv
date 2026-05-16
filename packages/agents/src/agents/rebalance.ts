@@ -31,6 +31,7 @@ Output the RebalanceProposal JSON only — no other text.`;
     });
     const match = response.match(/\{[\s\S]*\}/);
     parsed = JSON.parse(match?.[0] ?? response) as RebalanceProposal;
+    console.log(`  [rebalance] action=${parsed.action} reasoning="${(parsed.reasoning ?? '').slice(0, 100)}"`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     parsed = { action: "none", reasoning: `Rebalance error: ${msg.slice(0, 150)}` };

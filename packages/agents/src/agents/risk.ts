@@ -32,6 +32,7 @@ Assess all veto conditions. Calculate risk score. Output RiskAssessment JSON onl
     });
     const match = response.match(/\{[\s\S]*\}/);
     assessment = JSON.parse(match?.[0] ?? response) as RiskAssessment;
+    console.log(`  [risk] status=${assessment.status} veto=${assessment.veto} reason="${(assessment.vetoReason ?? '').slice(0, 80)}"`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     assessment = {
