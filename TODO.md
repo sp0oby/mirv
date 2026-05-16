@@ -300,9 +300,25 @@
   - RebalanceAgent recognizes anomalous data and returns `action: "none"` — correct safety behavior
 - [x] **Address checksum bug** — viem requires EIP-55 checksums; StateView/PoolManager addresses fixed.
 
-### Remaining for "all 4 agents firing in one cycle"
-- [ ] Set up comparable pools on all 3 chains so the rebalance proposal isn't anomalous
-- [ ] OR add a demo-mode flag to the rebalance prompt that forces minimum proposals when imbalance > X%
+### Remaining for "all 4 agents firing in one cycle" (deferred — saves Claude API credits)
+**Deferred for cost reasons** — each full demo cycle costs ~$0.01-0.03 in Claude credits. Running the loop for 5 minutes burns ~20 cycles.
+
+- [ ] **Initialize sister pools on Mainnet + BNB Anvil forks** with the deployed hook + matching liquidity (~L=1e12 each) so all 3 chains report similar TVL. Then the rebalance agent has "normal" data to act on (not anomalous $72k vs $95 vs $0).
+  - Reuse `InitPoolWithLiquidity.s.sol` but parameterize on chain (currently Base-only)
+  - Write `scripts/anvil-init-pool-mainnet.sh` + `scripts/anvil-init-pool-bnb.sh`
+  - BNB tokens already correct in monitor.ts: ETH-bep + USDC-bep
+- [ ] **Trigger artificial imbalance** by either:
+  - (a) Swapping on one chain to drift its price/depth (real economic action)
+  - (b) Calling `reportSisterDepth()` from the test harness to inject synthetic sister depths
+- [ ] **Watch the full chain** fire end-to-end:
+  - MonitorAgent (×3 chains) → real depth reported
+  - RebalanceAgent → proposes a moveable rebalance
+  - RiskAgent → green/yellow assessment
+  - CoordinatorAgent → encodes + dispatchRebalance via hook
+  - MockHyperlane relay daemon → delivers to destination
+  - Relayer.handle → executes (will revert on `modifyLiquidity` without LP funding, expected)
+
+**When to do this:** when you want to demo the full visible loop. Each demo run = ~$1-3 in API credits depending on duration. Use sparingly.
 
 ---
 
