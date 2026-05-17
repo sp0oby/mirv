@@ -469,20 +469,29 @@ The full 23-item Solidity security checklist (from `ethskills.com/security/SKILL
 
 See `TODO.md` for the full step-by-step build checklist. High-level milestones:
 
+Percentages are real completion counts from `TODO.md` checkboxes.
+
 | Phase | Status | Description |
 |---|---|---|
-| 0 | ✅ Done | Planning, architecture, all decisions locked |
-| 1 | ✅ Done | 5 contracts shipped, 70 tests passing, full Anvil deploy verified |
-| 2 | ✅ Done | 4 agents calling Claude Sonnet 4.6, universal V4 TVL math, conditional routing proven |
-| 3 | ⚪ Not Started | Frontend (Next.js scaffold + 6 pages) |
-| 4 | ✅ Done | 3-chain Anvil orchestration, MockHyperlane delivers cross-chain, vault lifecycle proven |
-| 5 | 🟡 **Next** | Testnet deployment (Base Sepolia → ETH Sepolia → BNB Testnet) |
-| 6 | ⚪ Not Started | Audit (Cantina) + Slither + Mythril + bug bounty |
-| 7 | 🟡 Pitch ready | `GRANT-APPLICATION.md` polished; submission pending |
-| 8 | ⚪ Not Started | Infra: Alchemy, Anthropic, Railway, Redis, Gnosis Safes, x402 proxy |
-| 9 | ⚪ Not Started | Mainnet launch (Base → Ethereum → BNB) |
-| 10 | ⚪ Not Started | Public launch + DefiLlama + Zapper + Bankr Skill |
-| 11 | ⚪ Future | $MIRROR token (governance + veTokenomics) |
+| 0 — Planning | **100%** ✅ | All decisions locked, memory + skills saved |
+| 1 — Contracts | **69%** 🟡 | 5 contracts shipped, 70 tests pass; Slither/Mythril/native hook tests pending |
+| 2 — Agents | **55%** 🟡 | Core works (4 agents calling Claude, V4 TVL math proven); 12 polish items remain (unit tests, memory/learning layer, optional Bankr) |
+| 3 — Frontend | **0%** ⚪ | Deferred until after testnet |
+| 4 — Anvil Demo | **90%** ✅ | 3-chain orchestration + MockHyperlane works; full 4-agent demo cycle deferred for Claude credit cost |
+| **5 — Testnet** | **0%** 🟡 **NEXT** | Base Sepolia → ETH Sepolia → (maybe BNB Testnet) |
+| 6 — Audit | 0% ⚪ | Cantina + Slither + Mythril + bug bounty |
+| 7 — Grant | **33%** 🟡 | `GRANT-APPLICATION.md` ready, submission pending |
+| 8 — Infra | 0% ⚪ | Alchemy / Anthropic / Railway / Gnosis Safes / x402 proxy |
+| 9 — Mainnet | 0% ⚪ | After audit |
+| 10 — Public | 0% ⚪ | After mainnet + DefiLlama + Zapper + Bankr Skill |
+| 11 — $MIRROR | **29%** ⚪ | Planning done, build deferred until TVL proven |
+
+**Status legend:** ✅ = production-ready · 🟡 = core works, polish pending · ⚪ = not started
+
+### What's blocking what
+- **Testnet (Phase 5) is NOT blocked** by Phase 1/2 incomplete items. The 70 contract tests + the agent infrastructure are battle-tested enough to deploy on Sepolia.
+- **Mainnet (Phase 9) IS blocked** by Phase 1 Slither/Mythril + Phase 6 audit + Phase 2 unit tests.
+- **Public launch (Phase 10) IS blocked** by Phase 3 frontend.
 
 ### What's already proven
 - **Solidity:** all 5 contracts deploy on real Base V4 PoolManager (fork) with correct CREATE2-mined hook addresses. afterSwap / afterAddLiquidity / afterRemoveLiquidity callbacks all fire on real V4 swaps via fork tests.
