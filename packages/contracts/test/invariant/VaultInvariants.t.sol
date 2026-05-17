@@ -7,6 +7,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MirrorVault} from "../../src/MirrorVault.sol";
 import {Treasury} from "../../src/Treasury.sol";
+import {MockTokenMessenger} from "../../src/mocks/MockTokenMessenger.sol";
 
 /// @notice 6-decimal USDC-like ERC-20 for invariant fuzzing
 contract MockUSDC is ERC20 {
@@ -108,8 +109,11 @@ contract VaultInvariantsTest is StdInvariant, Test {
         usdc = new MockUSDC();
         vm.prank(owner);
         treasury = new Treasury(safe, owner);
+        MockTokenMessenger cctp = new MockTokenMessenger();
         vm.prank(owner);
-        vault = new MirrorVault(IERC20(address(usdc)), address(treasury), owner, "mirv Test", "mirvTEST");
+        vault = new MirrorVault(
+            IERC20(address(usdc)), address(cctp), address(treasury), owner, "mirv Test", "mirvTEST"
+        );
         vm.prank(owner);
         vault.setAgentAuthorization(agent, true);
 

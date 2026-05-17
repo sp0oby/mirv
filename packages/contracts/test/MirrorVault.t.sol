@@ -187,4 +187,165 @@ contract MirrorVaultTest is TestBase {
         vm.prank(owner);
         vault.setTreasury(address(0));
     }
+
+    // ─── Chain registry (Phase A extensibility) ───────────────────────────────
+
+    function test_addChain() public {
+        vm.prank(owner);
+        vault.addChain(11155111, 0, bytes32(uint256(uint160(makeAddr("ethRelayer")))), address(0), bytes32(0), 4000);
+
+        assertEq(vault.enabledDomainsCount(), 1);
+        MirrorVault.ChainConfig memory cfg = vault.getChainConfig(11155111);
+        assertTrue(cfg.enabled);
+        assertEq(cfg.allocationBps, 4000);
+    }
+
+    function test_addChainTwiceReverts() public {
+        bytes32 recip = bytes32(uint256(uint160(makeAddr("ethRelayer"))));
+        vm.prank(owner);
+        vault.addChain(11155111, 0, recip, address(0), bytes32(0), 4000);
+        vm.prank(owner);
+        vm.expectRevert(MirrorVault.ChainAlreadyEnabled.selector);
+        vault.addChain(11155111, 0, recip, address(0), bytes32(0), 4000);
+    }
+
+    function test_setAllocationsEnforcesSum() public {
+        vm.startPrank(owner);
+        vault.addChain(11155111, 0, bytes32(uint256(uint160(makeAddr("a")))), address(0), bytes32(0), 6000);
+        vault.addChain(56, 0, bytes32(uint256(uint160(makeAddr("b")))), address(0), bytes32(0), 4000);
+
+        uint32[] memory domains = new uint32[](2);
+        uint16[] memory bps = new uint16[](2);
+        domains[0] = 11155111;
+        bps[0] = 5000;
+        domains[1] = 56;
+        bps[1] = 5000;
+        vault.setAllocations(domains, bps);
+        assertEq(vault.getChainConfig(11155111).allocationBps, 5000);
+
+        bps[0] = 3000;
+        bps[1] = 3000;
+        vm.expectRevert(MirrorVault.AllocationsMustSum10000.selector);
+        vault.setAllocations(domains, bps);
+        vm.stopPrank();
+    }
+
+    function test_removeChainRequiresZeroAllocation() public {
+        vm.startPrank(owner);
+        vault.addChain(11155111, 0, bytes32(uint256(uint160(makeAddr("a")))), address(0), bytes32(0), 4000);
+        vm.expectRevert(MirrorVault.ChainHasInFlightFunds.selector);
+        vault.removeChain(11155111);
+
+        // Rebalance: take 11155111 to 0, add another chain at 10000
+        vault.addChain(56, 0, bytes32(uint256(uint160(makeAddr("b")))), address(0), bytes32(0), 6000);
+        uint32[] memory d = new uint32[](2);
+        uint16[] memory b = new uint16[](2);
+        d[0] = 11155111;
+        b[0] = 0;
+        d[1] = 56;
+        b[1] = 10000;
+        vault.setAllocations(d, b);
+
+        vault.removeChain(11155111);
+        assertEq(vault.enabledDomainsCount(), 1);
+        vm.stopPrank();
+    }
+
+    function test_previewSplit() public {
+        vm.startPrank(owner);
+        vault.addChain(11155111, 0, bytes32(uint256(uint160(makeAddr("a")))), address(0), bytes32(0), 6000);
+        vault.addChain(56, 0, bytes32(uint256(uint160(makeAddr("b")))), address(0), bytes32(0), 4000);
+        vm.stopPrank();
+
+        (uint32[] memory ds, uint256[] memory amts) = vault.previewSplit(10_000e6);
+        assertEq(ds.length, 2);
+        assertEq(amts[0], 6_000e6);
+        assertEq(amts[1], 4_000e6);
+    }
+
+    // ─── Async withdrawal queue (Phase C) ─────────────────────────────────────
+
+    function test_requestWithdrawTransfersCustody() public {
+        uint256 amount = 1000e6;
+        _approveVault(alice, amount);
+        vm.prank(alice);
+        uint256 shares = vault.deposit(amount, alice);
+
+        vm.prank(alice);
+        uint256 requestId = vault.requestWithdraw(shares, alice);
+
+        assertEq(vault.balanceOf(alice), 0, "alice's shares moved to vault custody");
+        assertEq(vault.balanceOf(address(vault)), shares, "vault holds shares");
+        assertEq(requestId, 0);
+    }
+
+    function test_fulfillWithdrawBurnsAndPays() public {
+        uint256 amount = 1000e6;
+        _approveVault(alice, amount);
+        vm.prank(alice);
+        uint256 shares = vault.deposit(amount, alice);
+
+        vm.prank(alice);
+        uint256 requestId = vault.requestWithdraw(shares, alice);
+
+        uint256 aliceBefore = token0.balanceOf(alice);
+        vm.prank(agent);
+        vault.fulfillWithdraw(requestId);
+
+        assertEq(vault.balanceOf(address(vault)), 0, "custody shares burned");
+        assertEq(token0.balanceOf(alice) - aliceBefore, amount, "alice paid out");
+    }
+
+    function test_fulfillWithdrawByNonAgentReverts() public {
+        uint256 amount = 1000e6;
+        _approveVault(alice, amount);
+        vm.prank(alice);
+        uint256 shares = vault.deposit(amount, alice);
+        vm.prank(alice);
+        uint256 requestId = vault.requestWithdraw(shares, alice);
+
+        vm.expectRevert(MirrorVault.NotAuthorizedAgent.selector);
+        vm.prank(alice);
+        vault.fulfillWithdraw(requestId);
+    }
+
+    function test_cancelWithdrawAfterDelay() public {
+        uint256 amount = 1000e6;
+        _approveVault(alice, amount);
+        vm.prank(alice);
+        uint256 shares = vault.deposit(amount, alice);
+        vm.prank(alice);
+        uint256 requestId = vault.requestWithdraw(shares, alice);
+
+        vm.prank(alice);
+        vm.expectRevert(MirrorVault.TooEarlyToCancel.selector);
+        vault.cancelWithdraw(requestId);
+
+        vm.warp(block.timestamp + vault.WITHDRAW_CANCEL_DELAY() + 1);
+        vm.prank(alice);
+        vault.cancelWithdraw(requestId);
+
+        assertEq(vault.balanceOf(alice), shares, "shares returned to alice");
+    }
+
+    function test_syncWithdrawReverts_whenLocalBalanceShort() public {
+        _approveVault(alice, 1000e6);
+        vm.prank(alice);
+        vault.deposit(1000e6, alice);
+
+        // Simulate the vault sending its USDC away (e.g. bridged to a sister Relayer)
+        // and the agent reports those assets as cross-chain (so share value is preserved
+        // even though local balance is 0).
+        vm.prank(address(vault));
+        token0.transfer(makeAddr("decoy"), 1000e6);
+        vm.prank(agent);
+        vault.updateCrossChainAssets(1000e6);
+
+        // Now alice's shares still convert to 1000e6 assets, but vault has 0 local USDC.
+        // Sync redeem must revert with InsufficientLocalBalance.
+        uint256 aliceShares = vault.balanceOf(alice); // pre-read so vm.expectRevert targets only redeem
+        vm.expectRevert(MirrorVault.InsufficientLocalBalance.selector);
+        vm.prank(alice);
+        vault.redeem(aliceShares, alice, alice);
+    }
 }

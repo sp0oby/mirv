@@ -83,6 +83,7 @@ CHAINLINK_ETH_USD_MAINNET="${CHAINLINK_ETH_USD_ETH_SEPOLIA}" \
 forge script script/Deploy.s.sol:DeployEthereum \
   --rpc-url "${RPC}" \
   --broadcast \
+  --slow \
   ${VERIFY_FLAGS} \
   -vv 2>&1 | tail -25
 

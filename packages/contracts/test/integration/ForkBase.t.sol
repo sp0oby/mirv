@@ -11,6 +11,7 @@ import {MirrorHook} from "../../src/MirrorHook.sol";
 import {MirrorVault} from "../../src/MirrorVault.sol";
 import {MirrorFactory} from "../../src/MirrorFactory.sol";
 import {Treasury} from "../../src/Treasury.sol";
+import {MockTokenMessenger} from "../../src/mocks/MockTokenMessenger.sol";
 
 /// @notice In-process fork integration test against real Base mainnet contracts.
 ///         Validates the full deployment pipeline + vault lifecycle without
@@ -61,23 +62,30 @@ contract ForkBaseTest is Test {
         uint160 flags =
             uint160(Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG);
 
-        bytes memory constructorArgs =
-            abi.encode(IPoolManager(POOL_MANAGER), HYPERLANE_MAILBOX, PYTH, CHAINLINK_ETH_USD, PYTH_ETH_USD_ID, owner);
+        bytes32 canonicalPairId = keccak256(abi.encodePacked("ETH-USDC-V1", uint24(3000), int24(60)));
+
+        bytes memory constructorArgs = abi.encode(
+            IPoolManager(POOL_MANAGER), HYPERLANE_MAILBOX, PYTH, CHAINLINK_ETH_USD, PYTH_ETH_USD_ID, canonicalPairId, owner
+        );
 
         (address predicted, bytes32 salt) =
             HookMiner.find(address(this), flags, type(MirrorHook).creationCode, constructorArgs);
 
         // 3. Deploy hook via CREATE2 at the mined address
         hook = new MirrorHook{salt: salt}(
-            IPoolManager(POOL_MANAGER), HYPERLANE_MAILBOX, PYTH, CHAINLINK_ETH_USD, PYTH_ETH_USD_ID, owner
+            IPoolManager(POOL_MANAGER), HYPERLANE_MAILBOX, PYTH, CHAINLINK_ETH_USD, PYTH_ETH_USD_ID, canonicalPairId, owner
         );
         assertEq(address(hook), predicted, "Hook deployed at wrong address");
 
-        // 4. Deploy Vault
-        vault = new MirrorVault(IERC20(USDC), address(treasury), owner, "mirv ETH/USDC Vault", "mirvETH-USDC");
+        // 4. Deploy Vault + mock CCTP messenger
+        MockTokenMessenger cctp = new MockTokenMessenger();
+        vault = new MirrorVault(
+            IERC20(USDC), address(cctp), address(treasury), owner, "mirv ETH/USDC Vault", "mirvETH-USDC"
+        );
 
         // 5. Deploy Factory
-        factory = new MirrorFactory(POOL_MANAGER, HYPERLANE_MAILBOX, PYTH, address(treasury), owner);
+        factory =
+            new MirrorFactory(owner);
 
         // 6. Authorize agent
         vm.startPrank(owner);
@@ -187,12 +195,8 @@ contract ForkBaseTest is Test {
     }
 
     // ─── Factory access control ───────────────────────────────────────────────
-
-    function test_factoryStoresVerifiedAddresses() public view {
-        assertEq(address(factory.poolManager()), POOL_MANAGER);
-        assertEq(factory.mailbox(), HYPERLANE_MAILBOX);
-        assertEq(factory.pyth(), PYTH);
-    }
+    // Factory v4 is pure registry (no poolManager/mailbox/pyth/treasury state) —
+    // owner/agent auth + canonical registry covered in test/MirrorFactory.t.sol.
 
     // ─── Treasury fee forwarding ──────────────────────────────────────────────
 

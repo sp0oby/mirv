@@ -12,7 +12,7 @@ import {SwapParams, ModifyLiquidityParams} from "v4-core/src/types/PoolOperation
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {IMailbox} from "./interfaces/IHyperlane.sol";
+import {IMailbox, IMessageRecipient} from "./interfaces/IHyperlane.sol";
 import {IPyth} from "./interfaces/IPyth.sol";
 import {AggregatorV3Interface} from "./interfaces/IChainlink.sol";
 
@@ -26,7 +26,7 @@ import {AggregatorV3Interface} from "./interfaces/IChainlink.sol";
 ///      getHookPermissions(). Deploy with CREATE2. See script/MineHookAddress.s.sol.
 ///
 /// @dev Immutable — no proxy. Circuit breaker via Pausable. RiskAgent calls pause().
-contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
+contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRecipient {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
 
@@ -38,6 +38,9 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
     error InvalidThreshold();
     error SisterDomainAlreadyRegistered();
     error SisterDomainNotFound();
+    error NotMailbox();
+    error NotAuthorizedSender();
+    error InvalidPayload();
 
     // ─── Events ─────────────────────────────────────────────────────────────
     event ImbalanceDetected(bytes32 indexed pairId, uint256 imbalanceBps, uint256 driftBps);
@@ -47,8 +50,14 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
     event SisterDomainRemoved(uint32 domain);
     event ThresholdUpdated(uint256 imbalanceBps, uint256 driftBps);
     event SisterDepthReported(uint32 indexed domain, bytes32 pairId, uint256 depthUsd);
+    event SisterNotificationReceived(uint32 indexed origin, bytes32 indexed sender, bytes32 pairId, uint256 reportedDepth);
+    event AuthorizedSenderUpdated(bytes32 indexed sender, bool authorized);
 
     // ─── Types ───────────────────────────────────────────────────────────────
+    /// @dev `currentDepth` carries the sender chain's `localDepthUsd` at dispatch time
+    ///      so cross-chain notifications update `sisterDepths` on receipt without
+    ///      needing an off-chain agent round-trip. Struct must stay byte-for-byte
+    ///      identical with the Relayer's RebalanceMessage definition.
     struct RebalanceMessage {
         bytes32 pairId;
         int128 deltaToken0;
@@ -57,6 +66,7 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
         int24 tickLower;
         int24 tickUpper;
         uint256 minExpectedYield;
+        uint256 currentDepth;
     }
 
     struct SisterDomain {
@@ -81,8 +91,18 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
 
     bytes32 public immutable pythPriceFeedId; // e.g. ETH/USD feed id on Pyth
 
+    /// @dev Chain-independent pair identity issued by MirrorFactory.
+    ///      Same value across all chains for the same logical pair so cross-chain
+    ///      sisterDepths lookups align. Replaces the per-chain
+    ///      keccak256(currency0, currency1) pairId which varied across chains.
+    bytes32 public immutable canonicalPairId;
+
     /// @dev Authorized AI agent addresses (CoordinatorAgent hot wallet)
     mapping(address => bool) public authorizedAgents;
+
+    /// @dev 32-byte sender addresses (sister MirrorHooks) authorized to dispatch
+    ///      incoming Hyperlane messages to this hook's `handle()`.
+    mapping(bytes32 => bool) public authorizedSenders;
 
     /// @dev Registered sister chain domains
     SisterDomain[] public sisterDomains;
@@ -121,15 +141,18 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
         address _pyth,
         address _chainlinkFeed,
         bytes32 _pythFeedId,
+        bytes32 _canonicalPairId,
         address _owner
     ) BaseHook(_poolManager) Ownable(_owner) {
         if (_mailbox == address(0) || _pyth == address(0) || _chainlinkFeed == address(0)) {
             revert ZeroAddress();
         }
+        if (_canonicalPairId == bytes32(0)) revert ZeroAddress();
         mailbox = IMailbox(_mailbox);
         pyth = IPyth(_pyth);
         chainlinkFeed = AggregatorV3Interface(_chainlinkFeed);
         pythPriceFeedId = _pythFeedId;
+        canonicalPairId = _canonicalPairId;
     }
 
     // ─── BaseHook — hook permissions ─────────────────────────────────────────
@@ -179,6 +202,7 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
         BalanceDelta,
         bytes calldata
     ) internal override whenNotPaused returns (bytes4, BalanceDelta) {
+        _updateLocalDepth(key, delta.amount0(), delta.amount1(), true);
         _handleEvent(key, delta.amount0(), delta.amount1(), false);
         return (this.afterAddLiquidity.selector, BalanceDelta.wrap(0));
     }
@@ -192,6 +216,7 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
         BalanceDelta,
         bytes calldata
     ) internal override whenNotPaused returns (bytes4, BalanceDelta) {
+        _updateLocalDepth(key, delta.amount0(), delta.amount1(), false);
         _handleEvent(key, delta.amount0(), delta.amount1(), false);
         return (this.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
     }
@@ -199,9 +224,8 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
     // ─── Agent-callable ───────────────────────────────────────────────────────
 
     /// @notice Authorized CoordinatorAgent calls this to trigger an explicit
-    ///         cross-chain rebalance dispatch.
+    ///         cross-chain rebalance dispatch. Uses this hook's canonicalPairId.
     function dispatchRebalance(
-        bytes32 pairId,
         int128 deltaToken0,
         int128 deltaToken1,
         uint24 newFee,
@@ -210,38 +234,86 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
     ) external payable nonReentrant whenNotPaused {
         if (!authorizedAgents[msg.sender]) revert NotAuthorizedAgent();
 
+        // currentDepth = 0 here because dispatchRebalance is agent-initiated with
+        // intended deltas, not an event-driven depth report. handle() skips
+        // sisterDepths updates when currentDepth == 0, so this won't clobber tracking.
         RebalanceMessage memory rm = RebalanceMessage({
-            pairId: pairId,
+            pairId: canonicalPairId,
             deltaToken0: deltaToken0,
             deltaToken1: deltaToken1,
             newFee: newFee,
             tickLower: tickLower,
             tickUpper: tickUpper,
-            minExpectedYield: 0
+            minExpectedYield: 0,
+            currentDepth: 0
         });
 
         _dispatchToAllSisters(rm);
     }
 
     /// @notice Agents report sister pool depths here so the hook can make
-    ///         local imbalance decisions without oracle reads.
-    function reportSisterDepth(uint32 domain, bytes32 pairId, uint256 depthUsd) external {
+    ///         local imbalance decisions without oracle reads. Reports are
+    ///         stored against this hook's canonicalPairId.
+    function reportSisterDepth(uint32 domain, uint256 depthUsd) external {
         if (!authorizedAgents[msg.sender]) revert NotAuthorizedAgent();
-        sisterDepths[domain][pairId] = depthUsd;
-        emit SisterDepthReported(domain, pairId, depthUsd);
+        sisterDepths[domain][canonicalPairId] = depthUsd;
+        emit SisterDepthReported(domain, canonicalPairId, depthUsd);
+    }
+
+    // ─── IMessageRecipient — receive cross-chain notifications from sister hooks ──
+
+    /// @notice Entry point for Hyperlane-delivered messages from sister hooks.
+    ///         Updates this hook's `sisterDepths` tracking based on the reported
+    ///         depth in the message, so subsequent local events can detect
+    ///         imbalance without waiting for an off-chain agent's poll cycle.
+    /// @dev    Auth model mirrors Relayer: only mailbox can call, only registered
+    ///         sister addresses are accepted. Pausable so RiskAgent can halt
+    ///         cross-chain reads if oracle anomalies are detected upstream.
+    function handle(uint32 origin, bytes32 sender, bytes calldata message)
+        external
+        payable
+        override
+        whenNotPaused
+        nonReentrant
+    {
+        if (msg.sender != address(mailbox)) revert NotMailbox();
+        if (!authorizedSenders[sender]) revert NotAuthorizedSender();
+        if (message.length == 0) revert InvalidPayload();
+
+        RebalanceMessage memory rm = abi.decode(message, (RebalanceMessage));
+
+        // Defensive: only accept messages for THIS hook's canonical pair. Stray
+        // messages for unrelated pairs are silently ignored (no revert so a
+        // single broken sister can't grief the mailbox delivery queue).
+        if (rm.pairId != canonicalPairId) {
+            emit SisterNotificationReceived(origin, sender, rm.pairId, 0);
+            return;
+        }
+
+        // Treat currentDepth==0 as "no depth reported" (agent-initiated dispatchRebalance
+        // sends 0) so we don't clobber valid tracking with a zero.
+        if (rm.currentDepth != 0) {
+            sisterDepths[origin][canonicalPairId] = rm.currentDepth;
+            emit SisterDepthReported(origin, canonicalPairId, rm.currentDepth);
+        }
+
+        emit SisterNotificationReceived(origin, sender, canonicalPairId, rm.currentDepth);
     }
 
     // ─── Internal ────────────────────────────────────────────────────────────
 
-    function _handleEvent(PoolKey calldata key, int128 amount0, int128 amount1, bool zeroForOne) internal {
+    function _handleEvent(PoolKey calldata key, int128 amount0, int128 amount1, bool /*zeroForOne*/ ) internal {
         PoolId pid = key.toId();
-        bytes32 pairId = keccak256(abi.encode(key.currency0, key.currency1));
+        // Use the canonical (chain-independent) pair id so cross-chain sister
+        // depth lookups align. Pre-canonical builds used keccak256(currency0,currency1)
+        // which differed per chain because token addresses differ.
+        bytes32 pairId = canonicalPairId;
 
-        uint256 price = _getOraclePrice();
-        uint256 absAmt = zeroForOne
-            ? uint256(uint128(amount0 < 0 ? -amount0 : amount0))
-            : uint256(uint128(amount1 < 0 ? -amount1 : amount1));
-        uint256 usdValue = (absAmt * price) / 1e18;
+        // USD value of the event using the same decimal handling as
+        // `_updateLocalDepth` so the tiny-event guard below compares apples to
+        // apples. Assumes token0 is priced by `_getOraclePrice()` (18 decimals)
+        // and token1 is USDC-style (6 decimals).
+        uint256 usdValue = _eventUsdValue(amount0, amount1);
 
         // Skip tiny events below 0.1% of current depth (saves gas + Hyperlane fees)
         uint256 depth = localDepthUsd[pid];
@@ -261,7 +333,8 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
             newFee: key.fee,
             tickLower: 0,
             tickUpper: 0,
-            minExpectedYield: 0
+            minExpectedYield: 0,
+            currentDepth: depth
         });
 
         // CEI: update state BEFORE the external dispatch call so a malicious mailbox
@@ -296,6 +369,32 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
             if (diff * MAX_BPS / avg >= imbalanceThresholdBps) return true;
         }
         return false;
+    }
+
+    /// @dev Updates local pool depth tracking on add/remove liquidity. Without this
+    ///      the imbalance check in `_handleEvent` short-circuits to false forever
+    ///      and `MessageDispatched` never fires from V4 events. Assumes token0
+    ///      uses 18 decimals priced by `_getOraclePrice()` (e.g. WETH/USD) and
+    ///      token1 is USDC-style 6 decimals — matches mirv's only pair today.
+    function _updateLocalDepth(PoolKey calldata key, int128 amount0, int128 amount1, bool isAdd) internal {
+        PoolId pid = key.toId();
+        uint256 valueUsd = _eventUsdValue(amount0, amount1);
+
+        if (isAdd) {
+            localDepthUsd[pid] += valueUsd;
+        } else {
+            uint256 current = localDepthUsd[pid];
+            localDepthUsd[pid] = current > valueUsd ? current - valueUsd : 0;
+        }
+    }
+
+    /// @dev USD value of a V4 event (1e18-scaled). Sums token0 (oracle-priced,
+    ///      18 dec) and token1 (USDC, 6 dec) contributions.
+    function _eventUsdValue(int128 amount0, int128 amount1) internal view returns (uint256) {
+        uint256 price = _getOraclePrice();
+        uint256 abs0 = uint256(uint128(amount0 < 0 ? -amount0 : amount0));
+        uint256 abs1 = uint256(uint128(amount1 < 0 ? -amount1 : amount1));
+        return (abs0 * price) / 1e18 + abs1 * 1e12;
     }
 
     /// @dev Returns price in USD with 18 decimals.
@@ -351,6 +450,14 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
         if (agent == address(0)) revert ZeroAddress();
         authorizedAgents[agent] = authorized;
         emit AgentAuthorizationUpdated(agent, authorized);
+    }
+
+    /// @notice Authorize (or revoke) a 32-byte sender — a sister MirrorHook address —
+    ///         to call `handle()` via the mailbox.
+    function setAuthorizedSender(bytes32 sender, bool authorized) external onlyOwner {
+        if (sender == bytes32(0)) revert ZeroAddress();
+        authorizedSenders[sender] = authorized;
+        emit AuthorizedSenderUpdated(sender, authorized);
     }
 
     function setThresholds(uint256 newImbalanceBps, uint256 newDriftBps) external onlyOwner {

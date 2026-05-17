@@ -2,129 +2,123 @@
 pragma solidity 0.8.26;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
-import {PoolKey} from "v4-core/src/types/PoolKey.sol";
-import {Currency} from "v4-core/src/types/Currency.sol";
-import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
-import {MirrorHook} from "./MirrorHook.sol";
-import {MirrorVault} from "./MirrorVault.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 /// @title MirrorFactory
-/// @notice Permissionless factory for deploying new mirrored V4 pool pairs.
-///         A pair qualifies when it has >= $500k TVL AND >= $100k daily volume
-///         on ALL three chains. Agents verify this off-chain and call `deployPair`.
+/// @notice Cross-chain pair registry for mirv. Issues chain-independent
+///         `canonicalPairId` values and records local-chain token + hook
+///         addresses for each canonical pair on each Hyperlane domain.
 ///
-/// @dev The factory does NOT mine hook addresses — that must be done off-chain via
-///      MineHookAddress.s.sol before calling deployPair. Pass the pre-computed salt.
+/// @dev v4 design: the Factory is pure registry. Hook + Vault contracts for
+///      a new pair are deployed via standalone scripts (see Deploy.s.sol /
+///      DeployBase). After deploys, owner calls `registerLocalPair` to slot
+///      the pair into the registry. This keeps Factory under the EVM 24576-byte
+///      contract size limit (embedding MirrorHook + MirrorVault init_code blew
+///      it past the limit in earlier drafts) AND lets per-chain deploy scripts
+///      remain idiomatic forge scripts rather than complex factory calls.
+///
+/// @dev Permissionless pair qualification (>= $500k TVL, >= $100k daily volume
+///      on all enabled chains) is enforced off-chain by agents before they
+///      trigger the deploy sequence — the on-chain registry only records
+///      deployments, it doesn't gate them.
 contract MirrorFactory is Ownable {
     // ─── Errors ─────────────────────────────────────────────────────────────
-    error PairAlreadyDeployed();
+    error PairNotRegistered();
+    error CanonicalAlreadyRegistered();
+    error LocalPairAlreadyRegistered();
+    error EmptyName();
     error ZeroAddress();
     error NotAuthorizedAgent();
+    error TokensOutOfOrder();
 
     // ─── Events ─────────────────────────────────────────────────────────────
-    event PairDeployed(bytes32 indexed pairId, address hook, address vault, address token0, address token1);
+    event CanonicalPairRegistered(bytes32 indexed canonicalId, string name, uint24 fee, int24 tickSpacing);
+    event LocalPairRegistered(
+        bytes32 indexed canonicalId, uint32 indexed hyperlaneDomain, address token0, address token1, address hook
+    );
     event AgentAuthorizationUpdated(address indexed agent, bool authorized);
 
     // ─── Types ───────────────────────────────────────────────────────────────
-    struct DeployedPair {
-        address hook;
-        address vault;
+    struct CanonicalPair {
+        string name; // human-readable, e.g. "ETH-USDC-V1"
+        uint24 fee; // V4 fee tier
+        int24 tickSpacing; // V4 tick spacing
+        bool registered;
+    }
+
+    struct LocalPair {
         address token0;
         address token1;
-        uint256 deployedAt;
+        address hook;
+        bool registered;
     }
 
     // ─── State ───────────────────────────────────────────────────────────────
-    IPoolManager public immutable poolManager;
-    address public immutable mailbox;
-    address public immutable pyth;
-    address public immutable treasury;
 
-    mapping(bytes32 => DeployedPair) public deployedPairs;
+    /// @dev "ETH-USDC-V1" → canonical id (keccak256(name, fee, tickSpacing))
+    mapping(string => bytes32) public canonicalIdByName;
+    /// @dev canonical id → metadata
+    mapping(bytes32 => CanonicalPair) public canonicalPairs;
+    /// @dev canonical id → on which Hyperlane domain → local token + hook addresses
+    mapping(bytes32 => mapping(uint32 => LocalPair)) public localPairs;
     mapping(address => bool) public authorizedAgents;
 
-    /// @dev Pairs indexed for enumeration
-    bytes32[] public allPairIds;
+    /// @dev All canonical ids issued (for enumeration)
+    bytes32[] public allCanonicalIds;
 
     // ─── Constructor ─────────────────────────────────────────────────────────
-    constructor(address _poolManager, address _mailbox, address _pyth, address _treasury, address _owner)
-        Ownable(_owner)
+    /// @param _owner Owner / admin who registers pairs (multisig recommended at mainnet)
+    constructor(address _owner) Ownable(_owner) {}
+
+    // ─── Canonical pair registry ─────────────────────────────────────────────
+
+    /// @notice Issue a chain-independent canonical id for a logical pair.
+    ///         Every chain's MirrorHook for this pair uses the same canonical id.
+    function registerCanonicalPair(string calldata name, uint24 fee, int24 tickSpacing)
+        external
+        onlyOwner
+        returns (bytes32 canonicalId)
     {
-        if (_poolManager == address(0) || _mailbox == address(0) || _pyth == address(0) || _treasury == address(0)) {
-            revert ZeroAddress();
-        }
-        poolManager = IPoolManager(_poolManager);
-        mailbox = _mailbox;
-        pyth = _pyth;
-        treasury = _treasury;
+        if (bytes(name).length == 0) revert EmptyName();
+        if (canonicalIdByName[name] != bytes32(0)) revert CanonicalAlreadyRegistered();
+
+        canonicalId = keccak256(abi.encodePacked(name, fee, tickSpacing));
+        canonicalIdByName[name] = canonicalId;
+        canonicalPairs[canonicalId] = CanonicalPair({name: name, fee: fee, tickSpacing: tickSpacing, registered: true});
+        allCanonicalIds.push(canonicalId);
+
+        emit CanonicalPairRegistered(canonicalId, name, fee, tickSpacing);
     }
 
-    // ─── Deploy ───────────────────────────────────────────────────────────────
-
-    /// @notice Deploy a new MirrorHook + MirrorVault for a token pair.
-    ///         Caller must have pre-mined a hook address with correct permission bits.
-    ///
-    /// @param token0           Address of token0 (must be < token1 for V4 ordering)
-    /// @param token1           Address of token1
-    /// @param chainlinkFeed    Chainlink price feed for the pair
-    /// @param pythFeedId       Pyth price feed ID
-    /// @param hookSalt         CREATE2 salt to deploy MirrorHook at the mined address
-    /// @param feeTier          V4 fee tier (e.g. 3000 = 0.3%)
-    /// @param tickSpacing      Tick spacing matching the fee tier
-    function deployPair(
+    /// @notice Link a canonical pair to its local-chain token + hook addresses on
+    ///         a specific Hyperlane domain. Lets us track which deployed hook on
+    ///         which chain corresponds to the same logical pair, so new chains
+    ///         can be slotted in via this admin tx without redeploying anything.
+    function registerLocalPair(
+        bytes32 canonicalId,
+        uint32 hyperlaneDomain,
         address token0,
         address token1,
-        address chainlinkFeed,
-        bytes32 pythFeedId,
-        bytes32 hookSalt,
-        uint24 feeTier,
-        int24 tickSpacing
-    ) external returns (address hook, address vault) {
-        if (!authorizedAgents[msg.sender]) revert NotAuthorizedAgent();
-        if (token0 == address(0) || token1 == address(0)) revert ZeroAddress();
+        address hook
+    ) external onlyOwner {
+        if (!canonicalPairs[canonicalId].registered) revert PairNotRegistered();
+        if (token0 >= token1) revert TokensOutOfOrder();
+        if (token0 == address(0) || hook == address(0)) revert ZeroAddress();
+        if (localPairs[canonicalId][hyperlaneDomain].registered) revert LocalPairAlreadyRegistered();
 
-        bytes32 pairId = keccak256(abi.encode(token0, token1));
-        if (deployedPairs[pairId].hook != address(0)) revert PairAlreadyDeployed();
+        localPairs[canonicalId][hyperlaneDomain] =
+            LocalPair({token0: token0, token1: token1, hook: hook, registered: true});
 
-        // Deploy MirrorHook via CREATE2 using pre-mined salt
-        hook = address(new MirrorHook{salt: hookSalt}(poolManager, mailbox, pyth, chainlinkFeed, pythFeedId, owner()));
-
-        // Build vault name/symbol from token metadata
-        string memory sym0 = IERC20Metadata(token0).symbol();
-        string memory sym1 = IERC20Metadata(token1).symbol();
-        string memory vaultName = string.concat("Mirror ", sym0, "/", sym1, " Vault");
-        string memory vaultSymbol = string.concat("mirv", sym0, "-", sym1);
-
-        // Deploy MirrorVault with token0 as the primary deposit asset
-        vault = address(new MirrorVault(IERC20(token0), treasury, owner(), vaultName, vaultSymbol));
-
-        // Initialize the V4 pool
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(token0),
-            currency1: Currency.wrap(token1),
-            fee: feeTier,
-            tickSpacing: tickSpacing,
-            hooks: IHooks(hook)
-        });
-        poolManager.initialize(key, 79228162514264337593543950336); // sqrtPriceX96 = 1.0
-
-        deployedPairs[pairId] = DeployedPair(hook, vault, token0, token1, block.timestamp);
-        allPairIds.push(pairId);
-
-        emit PairDeployed(pairId, hook, vault, token0, token1);
+        emit LocalPairRegistered(canonicalId, hyperlaneDomain, token0, token1, hook);
     }
 
     // ─── View ─────────────────────────────────────────────────────────────────
 
-    function pairCount() external view returns (uint256) {
-        return allPairIds.length;
+    function canonicalPairCount() external view returns (uint256) {
+        return allCanonicalIds.length;
     }
 
-    function getPair(bytes32 pairId) external view returns (DeployedPair memory) {
-        return deployedPairs[pairId];
+    function getLocalPair(bytes32 canonicalId, uint32 hyperlaneDomain) external view returns (LocalPair memory) {
+        return localPairs[canonicalId][hyperlaneDomain];
     }
 
     // ─── Admin ───────────────────────────────────────────────────────────────

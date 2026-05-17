@@ -31,6 +31,16 @@ HOOK_BASE=$(jq -r '[.transactions[] | select(.contractName == "MirrorHook")][0].
 HOOK_ETH=$(jq -r '[.transactions[] | select(.contractName == "MirrorHook")][0].contractAddress' "${ETH_LOG}")
 RELAYER_ETH=$(jq -r '[.transactions[] | select(.contractName == "Relayer")][0].contractAddress' "${ETH_LOG}")
 
+# After a redeploy that touches only MirrorHook, broadcast logs won't contain
+# Relayer — fall back to .env. Same for Hook addresses if log somehow missed them.
+[[ "${HOOK_BASE}" == "null" || -z "${HOOK_BASE}" ]] && HOOK_BASE="${MIRROR_HOOK_BASE:-}"
+[[ "${HOOK_ETH}"  == "null" || -z "${HOOK_ETH}"  ]] && HOOK_ETH="${MIRROR_HOOK_MAINNET:-}"
+[[ "${RELAYER_ETH}" == "null" || -z "${RELAYER_ETH}" ]] && RELAYER_ETH="${RELAYER_MAINNET:-}"
+
+for v in HOOK_BASE HOOK_ETH RELAYER_ETH; do
+  [[ -z "${!v}" ]] && { echo "✗ ${v} not set in broadcast log or .env"; exit 1; }
+done
+
 echo "Testnet deployment:"
 echo "  HOOK_BASE (Base Sepolia):     ${HOOK_BASE}"
 echo "  HOOK_ETH  (ETH Sepolia):      ${HOOK_ETH}"
@@ -39,25 +49,32 @@ echo ""
 
 cd "${ROOT}/packages/contracts"
 
+# Hyperlane testnet domain IDs match chain IDs:
+#   Base Sepolia    = 84532
+#   Ethereum Sepolia = 11155111
+# (BNB is skipped at testnet — no V4 there.) WireSisterDomains.s.sol reads these
+# from env with mainnet defaults, so we override here.
+
 # ── Wire Base hook → Ethereum sister ──────────────────────────────────────────
 echo "→ Wiring Base Sepolia hook to know about Ethereum Sepolia relayer..."
 MIRROR_HOOK_BASE="${HOOK_BASE}" \
 RELAYER_MAINNET="${RELAYER_ETH}" \
-RELAYER_BNB="0x0000000000000000000000000000000000000000" \
+DOMAIN_ETHEREUM=11155111 \
+DOMAIN_BASE=84532 \
 forge script script/WireSisterDomains.s.sol:WireBase \
   --rpc-url "${ALCHEMY_BASE_SEPOLIA_URL}" --broadcast 2>&1 \
-  | grep -E "Base hook|sister|EXECUTION|Error" | head -5
+  | grep -E "Base hook|sister|Skipping|EXECUTION|Error" | head -5
 
 echo ""
-echo "→ Wiring Ethereum Sepolia hook + relayer (sister = Base, ignore BNB)..."
+echo "→ Wiring Ethereum Sepolia hook + relayer (sister = Base, BNB skipped)..."
 MIRROR_HOOK_MAINNET="${HOOK_ETH}" \
 RELAYER_MAINNET="${RELAYER_ETH}" \
 MIRROR_HOOK_BASE="${HOOK_BASE}" \
-MIRROR_HOOK_BNB="${HOOK_BASE}" \
-RELAYER_BNB="0x0000000000000000000000000000000000000000" \
+DOMAIN_ETHEREUM=11155111 \
+DOMAIN_BASE=84532 \
 forge script script/WireSisterDomains.s.sol:WireMainnet \
-  --rpc-url "${ALCHEMY_ETH_SEPOLIA_URL}" --broadcast 2>&1 \
-  | grep -E "Ethereum|hook|EXECUTION|Error" | head -5
+  --rpc-url "${ALCHEMY_ETH_SEPOLIA_URL}" --broadcast --slow 2>&1 \
+  | grep -E "Ethereum|hook|Skipping|EXECUTION|Error" | head -5
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════════"

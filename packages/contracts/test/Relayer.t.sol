@@ -114,7 +114,8 @@ contract RelayerTest is Test {
                 newFee: 3000,
                 tickLower: -60,
                 tickUpper: 60,
-                minExpectedYield: 0
+                minExpectedYield: 0,
+                currentDepth: 0
             })
         );
 

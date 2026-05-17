@@ -9,6 +9,7 @@ import {Treasury} from "../src/Treasury.sol";
 import {Relayer} from "../src/Relayer.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IMailbox} from "../src/interfaces/IHyperlane.sol";
 import {EnvHelpers} from "./lib/EnvHelpers.sol";
 
 // Deploy — Foundry deployment scripts for mirv contracts.
@@ -23,6 +24,12 @@ import {EnvHelpers} from "./lib/EnvHelpers.sol";
 
 bytes32 constant PYTH_ETH_USD_ID = 0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace;
 
+// Canonical pair id for the initial ETH/USDC V1 pair — computed identically on
+// every chain so MirrorHooks for the same logical pair share their canonical id.
+// Matches MirrorFactory.registerCanonicalPair("ETH-USDC-V1", 3000, 60).
+bytes32 constant CANONICAL_PAIR_ID_ETH_USDC =
+    keccak256(abi.encodePacked("ETH-USDC-V1", uint24(3000), int24(60)));
+
 // ─── Base deployment ──────────────────────────────────────────────────────────
 contract DeployBase is Script {
     function run() external {
@@ -33,9 +40,8 @@ contract DeployBase is Script {
         address poolMgr = vm.envAddress("POOL_MANAGER_BASE");
         address pyth = vm.envAddress("PYTH_ADDRESS_BASE");
         address chainlink = vm.envAddress("CHAINLINK_ETH_USD_BASE");
-        // Vault accepts this token. Mainnet = USDC; testnet = Circle testnet USDC.
-        // Override via VAULT_ASSET_BASE in .env or wrapper script.
         address vaultAsset = vm.envAddress("VAULT_ASSET_BASE");
+        address cctpMessenger = vm.envAddress("CCTP_TOKEN_MESSENGER_BASE");
         bytes32 hookSalt = bytes32(vm.envUint("HOOK_SALT_BASE"));
 
         vm.startBroadcast(deployerKey);
@@ -43,16 +49,32 @@ contract DeployBase is Script {
         Treasury treasury = new Treasury(safe, deployer);
         console2.log("Treasury:", address(treasury));
 
-        MirrorHook hook =
-            new MirrorHook{salt: hookSalt}(IPoolManager(poolMgr), mailbox, pyth, chainlink, PYTH_ETH_USD_ID, deployer);
+        MirrorHook hook = new MirrorHook{salt: hookSalt}(
+            IPoolManager(poolMgr), mailbox, pyth, chainlink, PYTH_ETH_USD_ID, CANONICAL_PAIR_ID_ETH_USDC, deployer
+        );
         console2.log("MirrorHook (Base):", address(hook));
 
-        MirrorVault vault =
-            new MirrorVault(IERC20(vaultAsset), address(treasury), deployer, "mirv ETH/USDC Vault", "mirvETH-USDC");
+        MirrorVault vault = new MirrorVault(
+            IERC20(vaultAsset), cctpMessenger, address(treasury), deployer, "mirv ETH/USDC Vault", "mirvETH-USDC"
+        );
         console2.log("MirrorVault (Base):", address(vault));
 
-        MirrorFactory factory = new MirrorFactory(poolMgr, mailbox, pyth, address(treasury), deployer);
+        MirrorFactory factory = new MirrorFactory(deployer);
         console2.log("MirrorFactory:", address(factory));
+
+        // Register the canonical pair so subsequent registerLocalPair calls work
+        factory.registerCanonicalPair("ETH-USDC-V1", uint24(3000), int24(60));
+
+        // Register this chain's local pair under the canonical id. token0 must be < token1.
+        address token0 = vaultAsset < vm.envAddress("WETH_BASE") ? vaultAsset : vm.envAddress("WETH_BASE");
+        address token1 = vaultAsset < vm.envAddress("WETH_BASE") ? vm.envAddress("WETH_BASE") : vaultAsset;
+        uint32 localDomain = IMailbox(mailbox).localDomain();
+        factory.registerLocalPair(CANONICAL_PAIR_ID_ETH_USDC, localDomain, token0, token1, address(hook));
+
+        // Seed the chain registry with the local chain at 100% allocation. After the
+        // sister chains deploy, owner calls Vault.addChain + setAllocations to rebalance
+        // (e.g. 60% Base / 40% Ethereum at mainnet launch).
+        vault.addChain(localDomain, 0, bytes32(0), address(0), bytes32(0), uint16(10_000));
 
         address agentWallet = vm.envAddress("AGENT_WALLET");
         hook.setAgentAuthorization(agentWallet, true);
@@ -82,8 +104,9 @@ contract DeployEthereum is Script {
 
         vm.startBroadcast(deployerKey);
 
-        MirrorHook hook =
-            new MirrorHook{salt: hookSalt}(IPoolManager(poolMgr), mailbox, pyth, chainlink, PYTH_ETH_USD_ID, deployer);
+        MirrorHook hook = new MirrorHook{salt: hookSalt}(
+            IPoolManager(poolMgr), mailbox, pyth, chainlink, PYTH_ETH_USD_ID, CANONICAL_PAIR_ID_ETH_USDC, deployer
+        );
         console2.log("MirrorHook (Ethereum):", address(hook));
 
         Relayer relayer = new Relayer(poolMgr, mailbox, deployer);
@@ -95,6 +118,76 @@ contract DeployEthereum is Script {
         vm.stopBroadcast();
 
         console2.log("\n=== Add to .env ===");
+        console2.log("MIRROR_HOOK_MAINNET=", address(hook));
+        console2.log("RELAYER_MAINNET=", address(relayer));
+    }
+}
+
+// ─── Redeploy only the Hook (+ Factory on Base) when hook bytecode changes ──
+// Use when a Hook bug-fix patch ships and the existing Treasury/Vault/Relayer
+// can be reused. Re-mine the salt first via MineHookAddress.s.sol.
+contract RedeployHookBase is Script {
+    function run() external {
+        uint256 deployerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
+        address deployer = vm.addr(deployerKey);
+        address mailbox = vm.envAddress("HYPERLANE_MAILBOX_BASE");
+        address poolMgr = vm.envAddress("POOL_MANAGER_BASE");
+        address pyth = vm.envAddress("PYTH_ADDRESS_BASE");
+        address chainlink = vm.envAddress("CHAINLINK_ETH_USD_BASE");
+        address treasuryAddr = vm.envAddress("TREASURY_BASE");
+        address cctpMessenger = vm.envAddress("CCTP_TOKEN_MESSENGER_BASE");
+        bytes32 hookSalt = bytes32(vm.envUint("HOOK_SALT_BASE"));
+
+        vm.startBroadcast(deployerKey);
+
+        MirrorHook hook = new MirrorHook{salt: hookSalt}(
+            IPoolManager(poolMgr), mailbox, pyth, chainlink, PYTH_ETH_USD_ID, CANONICAL_PAIR_ID_ETH_USDC, deployer
+        );
+        console2.log("MirrorHook (Base, redeployed):", address(hook));
+
+        MirrorFactory factory = new MirrorFactory(deployer);
+        console2.log("MirrorFactory (Base, redeployed):", address(factory));
+
+        address agentWallet = vm.envAddress("AGENT_WALLET");
+        hook.setAgentAuthorization(agentWallet, true);
+        factory.setAgentAuthorization(agentWallet, true);
+
+        vm.stopBroadcast();
+
+        console2.log("\n=== Update .env ===");
+        console2.log("MIRROR_HOOK_BASE=", address(hook));
+        console2.log("MIRROR_FACTORY_BASE=", address(factory));
+    }
+}
+
+contract RedeployHookEthereum is Script {
+    function run() external {
+        uint256 deployerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
+        address deployer = vm.addr(deployerKey);
+        address mailbox = vm.envAddress("HYPERLANE_MAILBOX_MAINNET");
+        address poolMgr = vm.envAddress("POOL_MANAGER_MAINNET");
+        address pyth = vm.envAddress("PYTH_ADDRESS_MAINNET");
+        address chainlink = vm.envAddress("CHAINLINK_ETH_USD_MAINNET");
+        bytes32 hookSalt = bytes32(vm.envUint("HOOK_SALT_MAINNET"));
+
+        vm.startBroadcast(deployerKey);
+
+        MirrorHook hook = new MirrorHook{salt: hookSalt}(
+            IPoolManager(poolMgr), mailbox, pyth, chainlink, PYTH_ETH_USD_ID, CANONICAL_PAIR_ID_ETH_USDC, deployer
+        );
+        console2.log("MirrorHook (Ethereum, redeployed):", address(hook));
+
+        // Relayer must redeploy whenever RebalanceMessage struct changes — the abi.decode
+        // in handle() and our internal callbacks needs byte-identical struct layout.
+        Relayer relayer = new Relayer(poolMgr, mailbox, deployer);
+        console2.log("Relayer (Ethereum, redeployed):", address(relayer));
+
+        address agentWallet = vm.envAddress("AGENT_WALLET");
+        hook.setAgentAuthorization(agentWallet, true);
+
+        vm.stopBroadcast();
+
+        console2.log("\n=== Update .env ===");
         console2.log("MIRROR_HOOK_MAINNET=", address(hook));
         console2.log("RELAYER_MAINNET=", address(relayer));
     }
@@ -113,8 +206,9 @@ contract DeployBnb is Script {
 
         vm.startBroadcast(deployerKey);
 
-        MirrorHook hook =
-            new MirrorHook{salt: hookSalt}(IPoolManager(poolMgr), mailbox, pyth, chainlink, PYTH_ETH_USD_ID, deployer);
+        MirrorHook hook = new MirrorHook{salt: hookSalt}(
+            IPoolManager(poolMgr), mailbox, pyth, chainlink, PYTH_ETH_USD_ID, CANONICAL_PAIR_ID_ETH_USDC, deployer
+        );
         console2.log("MirrorHook (BNB):", address(hook));
 
         Relayer relayer = new Relayer(poolMgr, mailbox, deployer);

@@ -6,6 +6,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {MirrorVault} from "../../src/MirrorVault.sol";
 import {Treasury} from "../../src/Treasury.sol";
+import {MockTokenMessenger} from "../../src/mocks/MockTokenMessenger.sol";
 
 /// @notice Minimal ERC20 for tests (6-decimal USDC-like)
 contract MockERC20 is ERC20 {
@@ -37,15 +38,24 @@ abstract contract TestBase is Test {
     MockERC20 internal token0; // 6 decimals (USDC-like)
     MirrorVault internal vault;
     Treasury internal treasury;
+    MockTokenMessenger internal cctpMessenger;
 
     function setUp() public virtual {
         token0 = new MockERC20("USDC Mock", "USDC", 6);
+        cctpMessenger = new MockTokenMessenger();
 
         vm.prank(owner);
         treasury = new Treasury(safe, owner);
 
         vm.prank(owner);
-        vault = new MirrorVault(IERC20(address(token0)), address(treasury), owner, "mirv Test Vault", "mirvTEST");
+        vault = new MirrorVault(
+            IERC20(address(token0)),
+            address(cctpMessenger),
+            address(treasury),
+            owner,
+            "mirv Test Vault",
+            "mirvTEST"
+        );
 
         vm.prank(owner);
         vault.setAgentAuthorization(agent, true);

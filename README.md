@@ -1,9 +1,11 @@
 # mirv — Mirrored Vault Protocol
 
-> One deposit. Liquidity working on Ethereum, Base, and BNB simultaneously.
-> Run by an AI agent swarm. Powered by Uniswap V4 hooks + Hyperlane.
+> One deposit. Liquidity working on Ethereum + Base simultaneously (BNB enabled post-launch).
+> Run by an AI agent swarm. Powered by Uniswap V4 hooks + Hyperlane + Circle CCTP.
 
-**mirv** (short for **mir**rored **v**ault) is a fully autonomous cross-chain liquidity protocol built on Uniswap V4. A public ERC-4626 vault on Base accepts a single deposit; the protocol then mirrors the position across sister pools on Ethereum and BNB Chain, keeping them synchronized in near-real-time through a swarm of LLM-powered agents.
+**mirv** (short for **mir**rored **v**ault) is a fully autonomous cross-chain liquidity protocol built on Uniswap V4. A public ERC-4626 vault on Base accepts a single USDC deposit; the protocol then bridges proportional amounts to sister chains via Circle CCTP and adds mirrored LP positions on each chain's V4 pool, keeping them synchronized in near-real-time through a swarm of LLM-powered agents.
+
+**Launch chains: Base (primary) + Ethereum.** BNB is designed-in but deferred to post-launch enablement via a single admin tx — both Circle CCTP support for BNB and Uniswap V4 on BNB Testnet are pending as of 2026-Q2.
 
 LPs earn meaningfully higher yield than any single-chain LP position because the protocol captures arb convergence, tighter effective spreads, and optimized fee tiers — all without users needing to touch three different chains.
 
@@ -26,7 +28,9 @@ LPs earn meaningfully higher yield than any single-chain LP position because the
 13. [Security](#13-security)
 14. [Tokenomics & Fees](#14-tokenomics--fees)
 15. [Roadmap](#15-roadmap)
-16. [References](#16-references)
+16. [Live Testnet Deployment (v4)](#16-live-testnet-deployment-v4)
+17. [Design Documents](#17-design-documents)
+18. [References](#18-references)
 
 ---
 
@@ -61,34 +65,37 @@ The LP-facing product is a single ERC-4626 vault on Base. Deposit once; everythi
                                             │  + Relayer       │
                                             └────────▲─────────┘
                                                      │
-                                       Hyperlane     │
+                                  Hyperlane (control)│
+                                  Circle CCTP (USDC) │
                                                      │
 ┌─── User ───┐                                       │
-│   ETH      │                                       │
 │   USDC     │  ┌─── Base (primary) ─────────────────┴─────┐
 └─────┬──────┘  │                                          │
       │         │   MirrorVault (ERC-4626)                 │
-      └────────►│   ↓                                      │
-                │   MirrorHook + V4 Pool                   │
+      └────────►│   ↓ split by chain registry              │
+                │   ├→ X% local (Base LP)                  │
+                │   └→ Y% bridge via CCTP → Ethereum       │
+                │                                          │
+                │   MirrorHook + V4 Pool (Base side)       │
                 │   ↑                                      │
                 │   Treasury → Gnosis Safe                 │
                 │                                          │
-                │   MirrorFactory (deploys new pairs)      │
-                └──────────────────┬───────────────────────┘
-                                   │
-                              Hyperlane
-                                   │
-                          ┌────────▼─────────┐
-                          │  BNB Chain       │
-                          │  V4 Pool         │
-                          │  + MirrorHook    │
-                          │  + Relayer       │
-                          └──────────────────┘
+                │   MirrorFactory (canonical pair registry)│
+                └──────────────────────────────────────────┘
+
+                          ┌─────────────────────────────┐
+                          │  BNB Chain (post-launch)    │
+                          │  Pending: CCTP-BNB + V4-BNB │
+                          │  Enables via Vault.addChain │
+                          │  No protocol redeploy needed│
+                          └─────────────────────────────┘
 
                           ┌─────────────────────────────┐
                           │  Agent Swarm (LangGraph)    │
                           │  ┌──────────────────────┐   │
-                          │  │ MonitorAgent × 3     │   │
+                          │  │ MonitorAgent × 2     │   │
+                          │  │   (Base + Ethereum;  │   │
+                          │  │    +BNB post-launch) │   │
                           │  │ RebalanceAgent       │   │
                           │  │ CoordinatorAgent     │   │
                           │  │ RiskAgent (veto)     │   │
@@ -103,26 +110,41 @@ The LP-facing product is a single ERC-4626 vault on Base. Deposit once; everythi
 **Step-by-step, end-to-end:**
 
 1. **User deposits** USDC into the mirv Vault on Base. They receive `mirvETH-USDC` tokens (vault shares).
-2. **Vault distributes** the deposit. It keeps a portion local and bridges proportional amounts to Ethereum and BNB through Hyperlane warp routes. Each chain's `Relayer.sol` adds LP positions to the local V4 pool.
+2. **Vault auto-splits the deposit** per chain allocation registry. At launch the split is **60% Base / 40% Ethereum**. The Ethereum portion is burned via Circle CCTP `depositForBurn` and natively minted to the ETH Relayer on the destination side (no synthetic tokens — real USDC on each chain). The Base portion stays in the vault for the local Base hook's LP path. WETH-side inventory is treasury-seeded on each Relayer at launch; replenished from accumulated fees.
 3. **Hooks watch every event.** `MirrorHook.sol` is attached to each sister pool. On every swap, add-liquidity, or remove-liquidity event, it:
    - Reads local oracle price (Pyth primary, Chainlink fallback)
+   - Updates `localDepthUsd` for this chain's view of the pool
    - Checks recorded sister-chain depths
-   - If imbalance > 3%, dispatches a Hyperlane notification to sister chains
-4. **MonitorAgents poll independently.** Every 45 seconds, three MonitorAgents (one per chain) read pool state via viem and produce structured JSON reports.
-5. **RebalanceAgent reasons.** Given the three monitor reports, it calculates optimal deltas, new fee tier, and tick range — but only proposes action if expected yield > gas + Hyperlane fee.
-6. **CoordinatorAgent validates.** It checks for conflicts, enforces 2% TVL move cap, encodes the Hyperlane payload, and calls `MirrorHook.dispatchRebalance()` on Base.
-7. **RiskAgent vetoes anything sketchy.** Big move, oracle anomaly, dead monitor — it raises status to red and pauses execution.
-8. **Hyperlane delivers** the message. `Relayer.sol` on the destination chain receives it, validates the sender, and calls `PoolManager.unlock()` → `modifyLiquidity()` to adjust the position.
-9. **Periodically, the vault harvests.** Once per day, an authorized agent calls `MirrorVault.harvest()`. The vault calculates extra yield over baseline, mints 15% of that as vault shares to the Treasury, and forwards them to the Gnosis Safe.
+   - If imbalance > 3%, dispatches a Hyperlane notification carrying its `localDepthUsd` to the sister chain's receiver (Base hook for ETH/BNB notifications; ETH Relayer for executable Base-initiated rebalances)
+4. **Cross-chain notification arrives via Hyperlane.** Source-side dispatches reach `Relayer.handle()` (executable path) or `MirrorHook.handle()` (informational depth-report path). Hook receivers update their `sisterDepths` mapping using the **canonical pair id** so cross-chain identity matches regardless of local token addresses.
+5. **MonitorAgents poll independently.** Every 45 seconds, MonitorAgents read pool state via viem from each chain (2 monitors at launch — Base + Ethereum) and produce structured JSON reports.
+6. **RebalanceAgent reasons.** Given the monitor reports, it calculates optimal deltas, new fee tier, and tick range — but only proposes action if expected yield > gas + Hyperlane fee.
+7. **CoordinatorAgent validates.** It checks for conflicts, enforces 2% TVL move cap, encodes the Hyperlane payload, and calls `MirrorHook.dispatchRebalance()` on Base.
+8. **RiskAgent vetoes anything sketchy.** Big move, oracle anomaly, dead monitor — it raises status to red and pauses execution.
+9. **Hyperlane delivers** the rebalance message. `Relayer.sol` on the destination chain receives it, validates the canonical pair id is registered, and calls `PoolManager.unlock()` → `modifyLiquidity()` to adjust the position.
+10. **Periodically, the vault harvests.** Once per day, an authorized agent calls `MirrorVault.harvest()`. The vault calculates extra yield over baseline, mints 15% of that as vault shares to the Treasury, and forwards them to the Gnosis Safe.
+
+**User withdrawals** flow through the same vault. Sync path: if Base-local USDC covers the redemption, ERC-4626 `redeem` returns USDC immediately. Async path: `requestWithdraw(shares, receiver)` queues the request; agent unwinds sister-chain LP, CCTP-bridges USDC back to Base, calls `fulfillWithdraw(requestId)`. ~2–5 min latency. If the agent fails to fulfill within 24h, the requester can call `cancelWithdraw` to reclaim their shares.
 
 The whole loop runs 24/7 with no human in the loop after launch.
+
+**BNB enablement (post-launch).** Once Circle CCTP supports BNB and Uniswap V4 ships on BNB, enabling BNB is a sequence of admin txs — no protocol redeploy:
+1. Deploy `Relayer` on BNB (one tx per chain, one-time)
+2. Deploy `MirrorHook` on BNB with the same canonical pair id (CREATE2 with mined salt)
+3. Initialize V4 pool on BNB with the new hook
+4. `Factory.registerLocalPair(canonicalPairId, BNB_DOMAIN, USDC_BNB, WETH_BNB, hookBnb)` (Base)
+5. `Vault.addChain(BNB_DOMAIN, CCTP_DOMAIN_BNB, b32(BnbRelayer), …, allocBps)` (Base)
+6. `Vault.setAllocations([Base, ETH, BNB], [...])` to rebalance allocations
+7. Wire sister domains; flip `ENABLE_BNB_MONITOR=true` on agent process
+
+Everything generalizes — adding any new chain follows the same pattern.
 
 ## 5. The Four Agents
 
 | Agent | Role | Vetos? | LLM |
 |---|---|---|---|
-| **MonitorAgent** (×3) | Polls one chain's pool state every 45s, reports depths + prices in JSON | — | Claude Sonnet 4.6 |
-| **RebalanceAgent** | Reads all three monitor reports, proposes a concrete rebalance plan | — | Claude Sonnet 4.6 |
+| **MonitorAgent** (×N, N=2 at launch) | Polls one chain's pool state every 45s, reports depths + prices in JSON. One per enabled chain — 2 at launch (Base + Ethereum), 3 when BNB enables post-launch (`ENABLE_BNB_MONITOR=true`) | — | Claude Sonnet 4.6 |
+| **RebalanceAgent** | Reads monitor reports across all enabled chains, proposes a concrete rebalance plan | — | Claude Sonnet 4.6 |
 | **CoordinatorAgent** | Validates the proposal, encodes Hyperlane payload, calls `dispatchRebalance` onchain | — | Claude Sonnet 4.6 |
 | **RiskAgent** | Reviews everything, can veto on flash-loan risk / oracle anomalies / dead monitors | Yes | Claude Sonnet 4.6 |
 
@@ -152,15 +174,15 @@ MonitorAgent×3 (parallel)
 
 | Contract | Deployed On | Purpose |
 |---|---|---|
-| **MirrorHook.sol** | All 3 chains | V4 hook intercepting `afterSwap` / `afterAddLiquidity` / `afterRemoveLiquidity`. Dispatches Hyperlane messages on significant events. |
-| **MirrorVault.sol** | Base only | ERC-4626 vault. Holds user deposits, mints `mirvETH-USDC` shares, charges 15% performance fee on extra yield only. |
-| **MirrorFactory.sol** | Base only | Permissionless factory for new mirrored pairs (requires ≥$500k TVL & ≥$100k daily volume on all 3 chains). |
-| **Treasury.sol** | All 3 chains | Thin fee-routing contract. Forwards collected fees directly to a Gnosis Safe. |
-| **Relayer.sol** | Ethereum + BNB | Receives Hyperlane messages, executes liquidity adjustments via `PoolManager.unlock()`. |
+| **MirrorHook.sol** | Every enabled chain | V4 hook intercepting `afterSwap` / `afterAddLiquidity` / `afterRemoveLiquidity`. Tracks `localDepthUsd` per pool. Dispatches Hyperlane messages on imbalance > 3%. Also implements `IMessageRecipient.handle()` to receive depth notifications from sister hooks — the inbound path uses the **canonical pair id** (set at construction) so cross-chain identity matches regardless of token addresses. |
+| **MirrorVault.sol** | Base only | ERC-4626 vault. Holds user deposits, mints `mirv<PAIR>` shares, charges 15% performance fee on extra yield. **Chain registry**: `addChain`/`removeChain`/`setAllocations` admin functions slot in new chains via single tx. **Auto-bridges deposits via Circle CCTP** per allocation. **Async withdrawal queue**: `requestWithdraw` → `fulfillWithdraw` handles cross-chain unwinds. |
+| **MirrorFactory.sol** | Base only | Pure cross-chain pair registry. `registerCanonicalPair(name, fee, tickSpacing)` issues a chain-independent `bytes32` identity used by every chain's hook. `registerLocalPair(canonicalId, hyperlaneDomain, token0, token1, hook)` records per-chain token+hook addresses. Pair deployment happens via standalone scripts (not the factory) — keeps Factory under the EVM 24KB contract size limit. |
+| **Treasury.sol** | Every chain with a Relayer/Vault | Thin fee-routing contract. Forwards collected fees directly to a Gnosis Safe. |
+| **Relayer.sol** | Sister chains (Ethereum at launch; BNB post-launch) | Implements `IMessageRecipient.handle()` for executable rebalance dispatches from the Base hook. Receives CCTP-bridged USDC natively; treasury-seeded WETH inventory for the LP side. Executes `modifyLiquidity` via `PoolManager.unlock()`. |
 
 All contracts are **immutable** — no proxy. Circuit breakers via `Pausable`. RiskAgent can call `pause()` to halt the system instantly.
 
-Hook addresses are mined with CREATE2 (`script/MineHookAddress.s.sol`) so the lower bits of the deployed address encode the exact `Hooks.Permissions` returned by `getHookPermissions()`.
+Hook addresses are mined with CREATE2 (`script/MineHookAddress.s.sol`) so the lower 14 bits of the deployed address encode the exact `Hooks.Permissions` flags. The miner takes the **canonical pair id** as input so the hook's `immutable canonicalPairId` is baked into the bytecode at the predicted address.
 
 ## 7. User Experience
 
@@ -474,15 +496,15 @@ Percentages are real completion counts from `TODO.md` checkboxes.
 | Phase | Status | Description |
 |---|---|---|
 | 0 — Planning | **100%** ✅ | All decisions locked, memory + skills saved |
-| 1 — Contracts | **69%** 🟡 | 5 contracts shipped, 70 tests pass; Slither/Mythril/native hook tests pending |
-| 2 — Agents | **55%** 🟡 | Core works (4 agents calling Claude, V4 TVL math proven); 12 polish items remain (unit tests, memory/learning layer, optional Bankr) |
-| 3 — Frontend | **0%** ⚪ | Deferred until after testnet |
-| 4 — Anvil Demo | **90%** ✅ | 3-chain orchestration + MockHyperlane works; full 4-agent demo cycle deferred for Claude credit cost |
-| **5 — Testnet** | **0%** 🟡 **NEXT** | Base Sepolia → ETH Sepolia → (maybe BNB Testnet) |
-| 6 — Audit | 0% ⚪ | Cantina + Slither + Mythril + bug bounty |
+| 1 — Contracts | **80%** 🟡 | 5 contracts shipped on Base Sepolia + ETH Sepolia at v4 iteration, 73 unit + 12 fork = 85 tests pass. Canonical pairId + chain registry + async withdrawal + CCTP integration + `handle()` symmetric notification all live. Slither/Mythril clean run pending. |
+| 2 — Agents | **60%** 🟡 | Core works (4 agents calling Claude, V4 TVL math proven). MonitorAgent count now N (2 at launch via env flag), 12 polish items remain (unit tests, memory/learning layer, optional Bankr) |
+| 3 — Frontend | **0%** ⚪ | Deferred until after testnet end-to-end validation |
+| 4 — Anvil Demo | **90%** ✅ | 3-chain orchestration + MockHyperlane works |
+| **5 — Testnet** | **80%** 🟢 | **Live on Base Sepolia + ETH Sepolia.** Canonical pairId, chain registry, CCTP-ready deposit, async withdrawal queue, bidirectional `handle()`. Agent loop + soak test pending. See addresses in §16. |
+| 6 — Audit | 0% ⚪ | Cantina + Slither + Mythril + bug bounty. Re-run static analysis on v4 bytecode. `BRIDGE-DESIGN.md` complete for review. |
 | 7 — Grant | **33%** 🟡 | `GRANT-APPLICATION.md` ready, submission pending |
 | 8 — Infra | 0% ⚪ | Alchemy / Anthropic / Railway / Gnosis Safes / x402 proxy |
-| 9 — Mainnet | 0% ⚪ | After audit |
+| 9 — Mainnet | 0% ⚪ | After audit. Launch: Base + Ethereum. BNB enables post-launch via single admin tx once CCTP-BNB + V4-BNB ship. |
 | 10 — Public | 0% ⚪ | After mainnet + DefiLlama + Zapper + Bankr Skill |
 | 11 — $MIRROR | **29%** ⚪ | Planning done, build deferred until TVL proven |
 
@@ -500,7 +522,35 @@ Percentages are real completion counts from `TODO.md` checkboxes.
 - **Cross-chain:** MockHyperlaneMailbox delivers messages between Anvil forks; production swap to real Hyperlane mailboxes is a single env-var change.
 - **Vault lifecycle:** USDC deposit → cross-chain yield report → 15% performance fee harvest → fee shares minted to treasury. All math verified.
 
-## 16. References
+## 16. Live Testnet Deployment (v4)
+
+Deployed 2026-05-17. All contracts verified on block explorers.
+
+**Canonical pair id (ETH-USDC-V1)**: `0x7a00c543412ae44415418950dc1ea26ae8977c50cbcec8035a5d99a911085b04`
+
+| Contract | Chain | Address |
+|---|---|---|
+| Treasury | Base Sepolia | [`0xb0bF2933B9D673736fB47DDE516803426111421a`](https://sepolia.basescan.org/address/0xb0bF2933B9D673736fB47DDE516803426111421a#code) |
+| MirrorHook | Base Sepolia | [`0x5FFB660142CA3034c508714d24797E80e7dc0540`](https://sepolia.basescan.org/address/0x5FFB660142CA3034c508714d24797E80e7dc0540#code) |
+| MirrorVault | Base Sepolia | [`0x4D168e17443454590ff97206789E458e457dFB81`](https://sepolia.basescan.org/address/0x4D168e17443454590ff97206789E458e457dFB81#code) |
+| MirrorFactory | Base Sepolia | [`0x2207e3A3117F219636F42b9209d021b73811485C`](https://sepolia.basescan.org/address/0x2207e3A3117F219636F42b9209d021b73811485C#code) |
+| MirrorHook | Ethereum Sepolia | [`0x9D42b4e0fC5eb64486C8171eEA9374a759990540`](https://sepolia.etherscan.io/address/0x9D42b4e0fC5eb64486C8171eEA9374a759990540#code) |
+| Relayer | Ethereum Sepolia | [`0x4B81e81B8aC495D399f636c013F5cfa414d6e10c`](https://sepolia.etherscan.io/address/0x4B81e81B8aC495D399f636c013F5cfa414d6e10c#code) |
+
+Wiring state:
+- Vault chain registry: 2 enabled domains — Base (84532, alloc 60%), Ethereum (11155111, alloc 40%, CCTP domain 0)
+- Hook canonical pair id matches across both chains ✓
+- Base hook → ETH Relayer (executable rebalance path) ✓
+- ETH hook → Base hook (inbound depth notification via `handle()`) ✓
+- Both hooks funded with 0.01 ETH for Hyperlane dispatch fees ✓
+- V4 pools initialized on both chains at tick 199800 with mirv hooks attached ✓
+
+## 17. Design Documents
+
+- [`BRIDGE-DESIGN.md`](./BRIDGE-DESIGN.md) — Token bridge architecture (CCTP for USDC, treasury-seeded WETH), Vault chain registry, async withdrawal flow, BNB enablement runbook
+- [`TODO.md`](./TODO.md) — Full build checklist with phase status and known gaps
+
+## 18. References
 
 - **Uniswap V4** — https://docs.uniswap.org/contracts/v4/overview
 - **OpenZeppelin uniswap-hooks** — https://github.com/OpenZeppelin/uniswap-hooks

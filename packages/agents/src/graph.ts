@@ -10,15 +10,19 @@ import { appendCycleHistory } from "./tools/redis.js";
 
 async function monitorAll(state: MirrorState): Promise<Partial<MirrorState>> {
   console.log(`\n[Cycle ${state.cycle}] Running monitors...`);
-  // Run all 3 chain monitors in parallel
-  const [eth, base, bnb] = await Promise.allSettled([
-    runMonitorAgent("ethereum", state),
-    runMonitorAgent("base",     state),
-    runMonitorAgent("bnb",      state),
-  ]);
+  // BNB deferred from mainnet launch — see BRIDGE-DESIGN.md §10 (CCTP doesn't yet
+  // support BNB, V4 not on BNB Testnet). The BNB MonitorAgent will be re-enabled
+  // once Vault.addChain is called for BNB post-launch (no contract redeploy needed
+  // — single admin tx). Until then, the swarm runs 2 chain monitors instead of 3.
+  const monitors: Array<"ethereum" | "base" | "bnb"> = ["base", "ethereum"];
+  if (process.env.ENABLE_BNB_MONITOR === "true") monitors.push("bnb");
+
+  const results = await Promise.allSettled(
+    monitors.map((chain) => runMonitorAgent(chain, state))
+  );
 
   const merged: Partial<MirrorState> = { monitorResults: {} };
-  for (const result of [eth, base, bnb]) {
+  for (const result of results) {
     if (result.status === "fulfilled") {
       Object.assign(merged.monitorResults!, result.value.monitorResults ?? {});
     }

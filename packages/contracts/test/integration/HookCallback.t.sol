@@ -93,14 +93,22 @@ contract HookCallbackTest is Test {
         // 3. Mine hook address (test contract is the CREATE2 deployer)
         uint160 flags =
             uint160(Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG);
-        bytes memory constructorArgs =
-            abi.encode(IPoolManager(POOL_MANAGER), HYPERLANE_MAILBOX, PYTH, CHAINLINK_ETH_USD, PYTH_ETH_USD_ID, owner);
+        bytes32 canonicalPairId = keccak256(abi.encodePacked("ETH-USDC-V1", uint24(3000), int24(60)));
+        bytes memory constructorArgs = abi.encode(
+            IPoolManager(POOL_MANAGER), HYPERLANE_MAILBOX, PYTH, CHAINLINK_ETH_USD, PYTH_ETH_USD_ID, canonicalPairId, owner
+        );
         (address predicted, bytes32 salt) =
             HookMiner.find(address(this), flags, type(MirrorHook).creationCode, constructorArgs);
 
         // 4. Deploy hook at the mined address
         hook = new MirrorHook{salt: salt}(
-            IPoolManager(POOL_MANAGER), HYPERLANE_MAILBOX, PYTH, CHAINLINK_ETH_USD, PYTH_ETH_USD_ID, owner
+            IPoolManager(POOL_MANAGER),
+            HYPERLANE_MAILBOX,
+            PYTH,
+            CHAINLINK_ETH_USD,
+            PYTH_ETH_USD_ID,
+            canonicalPairId,
+            owner
         );
         assertEq(address(hook), predicted);
 
@@ -186,15 +194,12 @@ contract HookCallbackTest is Test {
     // ─── Agent dispatch path ──────────────────────────────────────────────────
 
     function test_agentCanDispatchRebalance() public {
-        bytes32 pairId = keccak256(abi.encode(currency0, currency1));
-
-        // Agent reports sister depth (creates an imbalance scenario)
+        // Agent reports sister depth (creates an imbalance scenario). reportSisterDepth
+        // no longer takes a pairId — hook is per-canonical-pair.
         vm.prank(agent);
-        hook.reportSisterDepth(1, pairId, 5_000_000e18); // $5M on Ethereum
+        hook.reportSisterDepth(1, 5_000_000e18); // $5M on Ethereum
 
         // Agent triggers dispatchRebalance — mocked mailbox accepts the call
-        // No sister domains registered yet, so dispatch is a no-op (returns immediately)
-        // To exercise the actual dispatch path, add a sister domain first.
         vm.prank(owner);
         hook.addSisterDomain(1, bytes32(uint256(uint160(makeAddr("relayer-eth")))));
 
@@ -202,7 +207,7 @@ contract HookCallbackTest is Test {
         vm.recordLogs();
 
         vm.prank(agent);
-        hook.dispatchRebalance(pairId, 100e6, 0.1 ether, 3000, -60, 60);
+        hook.dispatchRebalance(100e6, 0.1 ether, 3000, -60, 60);
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bool foundDispatchEvent = false;
@@ -216,10 +221,189 @@ contract HookCallbackTest is Test {
     }
 
     function test_unauthorizedDispatchReverts() public {
-        bytes32 pairId = keccak256(abi.encode(currency0, currency1));
         vm.expectRevert(MirrorHook.NotAuthorizedAgent.selector);
         vm.prank(alice);
-        hook.dispatchRebalance(pairId, 0, 0, 3000, -60, 60);
+        hook.dispatchRebalance(0, 0, 3000, -60, 60);
+    }
+
+    // ─── Full V4-event dispatch pipeline ─────────────────────────────────────
+    // Regression: without these tests, `localDepthUsd` was never written and
+    // `_imbalanceExceeded` short-circuited to false forever, so MessageDispatched
+    // could not fire from V4 events. Caught at testnet 2026-05-17 by user.
+
+    function test_afterAddLiquidityUpdatesLocalDepth() public {
+        PoolId pid = poolKey.toId();
+        assertEq(hook.localDepthUsd(pid), 0, "fresh pool starts at 0 depth");
+
+        int24 currentTick = -207000;
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: ((currentTick - 1200) / 60) * 60,
+            tickUpper: ((currentTick + 1200) / 60) * 60,
+            liquidityDelta: 1e15,
+            salt: bytes32(0)
+        });
+        vm.prank(alice);
+        lpRouter.modifyLiquidity(poolKey, params, "");
+
+        assertGt(hook.localDepthUsd(pid), 0, "localDepthUsd must grow after LP add");
+    }
+
+    function test_afterRemoveLiquidityShrinksLocalDepth() public {
+        PoolId pid = poolKey.toId();
+        int24 currentTick = -207000;
+        int24 tickLower = ((currentTick - 1200) / 60) * 60;
+        int24 tickUpper = ((currentTick + 1200) / 60) * 60;
+
+        // First add liquidity so there's something to remove
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: 1e15, salt: bytes32(0)
+        });
+        vm.prank(alice);
+        lpRouter.modifyLiquidity(poolKey, addParams, "");
+        uint256 depthAfterAdd = hook.localDepthUsd(pid);
+        assertGt(depthAfterAdd, 0);
+
+        // Remove half
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: -int256(5e14), salt: bytes32(0)
+        });
+        vm.prank(alice);
+        lpRouter.modifyLiquidity(poolKey, removeParams, "");
+
+        assertLt(hook.localDepthUsd(pid), depthAfterAdd, "localDepthUsd must shrink after LP remove");
+    }
+
+    // ─── handle() inbound notification path ──────────────────────────────────
+    // Closes the architectural gap where ETH/BNB hooks dispatched into a void.
+    // Added 2026-05-17 alongside `IMessageRecipient` implementation on MirrorHook.
+
+    function test_handleAcceptsAuthorizedSister() public {
+        bytes32 sister = bytes32(uint256(uint160(makeAddr("sister-eth-hook"))));
+        vm.prank(owner);
+        hook.setAuthorizedSender(sister, true);
+
+        // Use the hook's canonicalPairId — handle() defensively rejects messages
+        // for unrelated pair ids (silently emits the receive event but doesn't update sisterDepths).
+        bytes32 pairId = hook.canonicalPairId();
+        uint256 reportedDepth = 5_000_000e18;
+
+        MirrorHook.RebalanceMessage memory rm = MirrorHook.RebalanceMessage({
+            pairId: pairId,
+            deltaToken0: 0,
+            deltaToken1: 0,
+            newFee: 3000,
+            tickLower: 0,
+            tickUpper: 0,
+            minExpectedYield: 0,
+            currentDepth: reportedDepth
+        });
+
+        vm.prank(HYPERLANE_MAILBOX);
+        hook.handle(1, sister, abi.encode(rm));
+
+        assertEq(hook.sisterDepths(1, pairId), reportedDepth, "sisterDepths must update on handle()");
+    }
+
+    function test_handleRevertsIfNotMailbox() public {
+        bytes32 sister = bytes32(uint256(uint160(makeAddr("sister"))));
+        vm.prank(owner);
+        hook.setAuthorizedSender(sister, true);
+
+        MirrorHook.RebalanceMessage memory rm = MirrorHook.RebalanceMessage({
+            pairId: keccak256("x"),
+            deltaToken0: 0, deltaToken1: 0, newFee: 3000,
+            tickLower: 0, tickUpper: 0,
+            minExpectedYield: 0, currentDepth: 1
+        });
+
+        vm.prank(alice);
+        vm.expectRevert(MirrorHook.NotMailbox.selector);
+        hook.handle(1, sister, abi.encode(rm));
+    }
+
+    function test_handleRevertsIfUnauthorizedSender() public {
+        bytes32 randomSender = bytes32(uint256(uint160(makeAddr("random"))));
+
+        MirrorHook.RebalanceMessage memory rm = MirrorHook.RebalanceMessage({
+            pairId: keccak256("x"),
+            deltaToken0: 0, deltaToken1: 0, newFee: 3000,
+            tickLower: 0, tickUpper: 0,
+            minExpectedYield: 0, currentDepth: 1
+        });
+
+        vm.prank(HYPERLANE_MAILBOX);
+        vm.expectRevert(MirrorHook.NotAuthorizedSender.selector);
+        hook.handle(1, randomSender, abi.encode(rm));
+    }
+
+    function test_handleSkipsZeroDepthSoAgentDispatchDoesNotClobber() public {
+        bytes32 sister = bytes32(uint256(uint160(makeAddr("sister"))));
+        vm.prank(owner);
+        hook.setAuthorizedSender(sister, true);
+
+        bytes32 canonicalPairId = hook.canonicalPairId();
+        uint256 priorDepth = 1_000_000e18;
+
+        // Seed an initial sister depth via the agent path
+        vm.prank(agent);
+        hook.reportSisterDepth(1, priorDepth);
+
+        // Now deliver a message with depth=0 (mimics dispatchRebalance's payload)
+        MirrorHook.RebalanceMessage memory rm = MirrorHook.RebalanceMessage({
+            pairId: canonicalPairId,
+            deltaToken0: 0, deltaToken1: 0, newFee: 3000,
+            tickLower: 0, tickUpper: 0,
+            minExpectedYield: 0,
+            currentDepth: 0
+        });
+
+        vm.prank(HYPERLANE_MAILBOX);
+        hook.handle(1, sister, abi.encode(rm));
+
+        assertEq(hook.sisterDepths(1, canonicalPairId), priorDepth, "zero-depth dispatch must not clobber valid tracking");
+    }
+
+    function test_imbalanceFromLpEventFiresDispatch() public {
+        PoolId pid = poolKey.toId();
+
+        // 1. Register a sister domain (otherwise dispatch loop is a no-op)
+        vm.prank(owner);
+        hook.addSisterDomain(1, bytes32(uint256(uint160(makeAddr("relayer-eth")))));
+
+        // 2. Bootstrap local depth with an initial LP add
+        int24 currentTick = -207000;
+        int24 tickLower = ((currentTick - 1200) / 60) * 60;
+        int24 tickUpper = ((currentTick + 1200) / 60) * 60;
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: 1e15, salt: bytes32(0)
+        });
+        vm.prank(alice);
+        lpRouter.modifyLiquidity(poolKey, addParams, "");
+
+        uint256 localDepth = hook.localDepthUsd(pid);
+        assertGt(localDepth, 0, "bootstrap LP add must seed local depth");
+
+        // 3. Report a sister depth that's 50% off from local (well above 3% threshold)
+        vm.prank(agent);
+        hook.reportSisterDepth(1, localDepth / 2);
+
+        // 4. Step past the dispatch cooldown
+        vm.warp(block.timestamp + hook.dispatchCooldown() + 1);
+
+        // 5. Add more LP — should fire ImbalanceDetected + RebalanceDispatched
+        vm.recordLogs();
+        vm.prank(alice);
+        lpRouter.modifyLiquidity(poolKey, addParams, "");
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bool foundImbalance = false;
+        bool foundDispatch = false;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == keccak256("ImbalanceDetected(bytes32,uint256,uint256)")) foundImbalance = true;
+            if (logs[i].topics[0] == keccak256("RebalanceDispatched(bytes32,uint32,bytes32)")) foundDispatch = true;
+        }
+        assertTrue(foundImbalance, "ImbalanceDetected must fire from afterAddLiquidity path");
+        assertTrue(foundDispatch, "RebalanceDispatched must fire from afterAddLiquidity path");
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────

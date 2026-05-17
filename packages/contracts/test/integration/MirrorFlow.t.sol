@@ -17,6 +17,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MirrorHook} from "../../src/MirrorHook.sol";
 import {MirrorVault} from "../../src/MirrorVault.sol";
 import {Treasury} from "../../src/Treasury.sol";
+import {MockTokenMessenger} from "../../src/mocks/MockTokenMessenger.sol";
 
 /// @notice End-to-end fork integration test exercising the full mirv lifecycle:
 ///         1. Deploy vault + hook on Base fork
@@ -74,9 +75,12 @@ contract MirrorFlowTest is Test {
         uint256 fork = vm.createFork(rpcUrl);
         vm.selectFork(fork);
 
-        // 1. Treasury + Vault
+        // 1. Treasury + Vault + mock CCTP messenger
         treasury = new Treasury(safe, owner);
-        vault = new MirrorVault(IERC20(USDC), address(treasury), owner, "mirv ETH/USDC Vault", "mirvETH-USDC");
+        MockTokenMessenger cctp = new MockTokenMessenger();
+        vault = new MirrorVault(
+            IERC20(USDC), address(cctp), address(treasury), owner, "mirv ETH/USDC Vault", "mirvETH-USDC"
+        );
 
         // 2. Mock Hyperlane mailbox so the hook can dispatch without ETH
         vm.mockCall(
@@ -87,15 +91,23 @@ contract MirrorFlowTest is Test {
         );
 
         // 3. Mine hook address with HookMiner (test contract is the CREATE2 deployer)
+        bytes32 canonicalPairId = keccak256(abi.encodePacked("ETH-USDC-V1", uint24(3000), int24(60)));
         uint160 flags =
             uint160(Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG);
-        bytes memory constructorArgs =
-            abi.encode(IPoolManager(POOL_MANAGER), HYPERLANE_MAILBOX, PYTH, CHAINLINK_ETH_USD, PYTH_ETH_USD_ID, owner);
+        bytes memory constructorArgs = abi.encode(
+            IPoolManager(POOL_MANAGER), HYPERLANE_MAILBOX, PYTH, CHAINLINK_ETH_USD, PYTH_ETH_USD_ID, canonicalPairId, owner
+        );
         (address predicted, bytes32 salt) =
             HookMiner.find(address(this), flags, type(MirrorHook).creationCode, constructorArgs);
 
         hook = new MirrorHook{salt: salt}(
-            IPoolManager(POOL_MANAGER), HYPERLANE_MAILBOX, PYTH, CHAINLINK_ETH_USD, PYTH_ETH_USD_ID, owner
+            IPoolManager(POOL_MANAGER),
+            HYPERLANE_MAILBOX,
+            PYTH,
+            CHAINLINK_ETH_USD,
+            PYTH_ETH_USD_ID,
+            canonicalPairId,
+            owner
         );
         assertEq(address(hook), predicted);
 

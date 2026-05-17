@@ -13,15 +13,22 @@ import {EnvHelpers} from "./lib/EnvHelpers.sol";
 ///
 /// Usage:
 ///   forge script script/MineHookAddress.s.sol \
-///     --sig "run(address,address,address,address,bytes32)" \
-///     <poolManager> <mailbox> <pyth> <chainlinkFeed> <pythFeedId>
+///     --sig "run(address,address,address,address,bytes32,bytes32)" \
+///     <poolManager> <mailbox> <pyth> <chainlinkFeed> <pythFeedId> <canonicalPairId>
+///
+/// canonicalPairId for the initial ETH/USDC V1 pair:
+///   keccak256(abi.encodePacked("ETH-USDC-V1", uint24(3000), int24(60)))
 ///
 /// Output: the salt to use in Deploy.s.sol
 contract MineHookAddress is Script {
-    function run(address poolManager, address mailbox, address pyth, address chainlinkFeed, bytes32 pythFeedId)
-        external
-        view
-    {
+    function run(
+        address poolManager,
+        address mailbox,
+        address pyth,
+        address chainlinkFeed,
+        bytes32 pythFeedId,
+        bytes32 canonicalPairId
+    ) external view {
         // The hook permissions we need encoded in the address lower bits
         // afterSwap=true, afterAddLiquidity=true, afterRemoveLiquidity=true
         uint160 requiredFlags =
@@ -32,7 +39,6 @@ contract MineHookAddress is Script {
 
         // CREATE2 deployer: Foundry routes `new X{salt}()` through this canonical address
         // when broadcasting. Must match for the mined salt → predicted address to be correct.
-        // See https://book.getfoundry.sh/cheatcodes/broadcast
         address deployer = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
         // Compute the creation bytecode hash — must match Deploy.s.sol constructor args exactly
@@ -42,7 +48,8 @@ contract MineHookAddress is Script {
             pyth,
             chainlinkFeed,
             pythFeedId,
-            owner // owner of MirrorHook = deployer EOA
+            canonicalPairId,
+            owner
         );
         bytes32 bytecodeHash = keccak256(abi.encodePacked(type(MirrorHook).creationCode, constructorArgs));
 

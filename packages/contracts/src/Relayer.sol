@@ -41,6 +41,11 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
     event MailboxUpdated(address indexed oldMailbox, address indexed newMailbox);
 
     // ─── Types ───────────────────────────────────────────────────────────────
+    /// @dev Must stay byte-for-byte identical with MirrorHook.RebalanceMessage.
+    ///      `currentDepth` is carried for cross-chain depth notifications but
+    ///      is unused by the Relayer's execution path (it only consumes deltas
+    ///      and tick range). Adding/removing fields here requires a coordinated
+    ///      redeploy of both Hook and Relayer.
     struct RebalanceMessage {
         bytes32 pairId; // keccak256(abi.encode(token0, token1))
         int128 deltaToken0; // positive = add, negative = remove
@@ -49,6 +54,7 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
         int24 tickLower;
         int24 tickUpper;
         uint256 minExpectedYield;
+        uint256 currentDepth;
     }
 
     // ─── State ───────────────────────────────────────────────────────────────
