@@ -21,11 +21,12 @@ LPs earn meaningfully higher yield than any single-chain LP position because the
 8. [Tech Stack](#8-tech-stack)
 9. [Project Structure](#9-project-structure)
 10. [Quick Start (Dev)](#10-quick-start-dev)
-11. [Deployment Sequence](#11-deployment-sequence)
-12. [Security](#12-security)
-13. [Tokenomics & Fees](#13-tokenomics--fees)
-14. [Roadmap](#14-roadmap)
-15. [References](#15-references)
+11. [Phase 5 — Testnet Deployment](#11-phase-5--testnet-deployment-next-milestone)
+12. [Deployment Sequence (Mainnet)](#12-deployment-sequence-mainnet)
+13. [Security](#13-security)
+14. [Tokenomics & Fees](#14-tokenomics--fees)
+15. [Roadmap](#15-roadmap)
+16. [References](#16-references)
 
 ---
 
@@ -120,10 +121,10 @@ The whole loop runs 24/7 with no human in the loop after launch.
 
 | Agent | Role | Vetos? | LLM |
 |---|---|---|---|
-| **MonitorAgent** (×3) | Polls one chain's pool state every 45s, reports depths + prices in JSON | — | Claude 4 |
-| **RebalanceAgent** | Reads all three monitor reports, proposes a concrete rebalance plan | — | Claude 4 |
-| **CoordinatorAgent** | Validates the proposal, encodes Hyperlane payload, calls `dispatchRebalance` onchain | — | Claude 4 |
-| **RiskAgent** | Reviews everything, can veto on flash-loan risk / oracle anomalies / dead monitors | Yes | Claude 4 |
+| **MonitorAgent** (×3) | Polls one chain's pool state every 45s, reports depths + prices in JSON | — | Claude Sonnet 4.6 |
+| **RebalanceAgent** | Reads all three monitor reports, proposes a concrete rebalance plan | — | Claude Sonnet 4.6 |
+| **CoordinatorAgent** | Validates the proposal, encodes Hyperlane payload, calls `dispatchRebalance` onchain | — | Claude Sonnet 4.6 |
+| **RiskAgent** | Reviews everything, can veto on flash-loan risk / oracle anomalies / dead monitors | Yes | Claude Sonnet 4.6 |
 
 All four prompts live as editable Markdown files in `packages/agents/src/prompts/`. Edit a `.md` file → restart the agent process → new prompt is live. No TypeScript changes needed.
 
@@ -209,46 +210,63 @@ Hook addresses are mined with CREATE2 (`script/MineHookAddress.s.sol`) so the lo
 ```
 mirrorAgents/
 ├── README.md                    ← you are here
-├── TODO.md                      ← full build checklist
+├── TODO.md                      ← full build checklist (Phase 0–11)
+├── SETUP.md                     ← env var sourcing guide
 ├── GRANT-APPLICATION.md         ← Uniswap Hook Incubator pitch
-├── .env.example                 ← all required env vars
+├── LICENSE                      ← MIT
+├── .env.example                 ← all required env vars (incl. testnet addresses)
 ├── package.json                 ← monorepo root
 │
-├── packages/contracts/          ← Foundry project
-│   ├── foundry.toml
+├── packages/contracts/          ← Foundry project, Solidity 0.8.26
+│   ├── foundry.toml             (via_ir + 1000-run fuzz + invariant config)
 │   ├── src/
-│   │   ├── MirrorHook.sol
-│   │   ├── MirrorVault.sol
-│   │   ├── MirrorFactory.sol
-│   │   ├── Treasury.sol
-│   │   ├── Relayer.sol
-│   │   └── interfaces/
-│   │       ├── IHyperlane.sol
-│   │       ├── IPyth.sol
-│   │       └── IChainlink.sol
+│   │   ├── MirrorHook.sol       ← V4 hook (afterSwap / afterAdd / afterRemove)
+│   │   ├── MirrorVault.sol      ← ERC-4626, 15% perf fee on extra yield only
+│   │   ├── MirrorFactory.sol    ← CREATE2 pair deployer
+│   │   ├── Treasury.sol         ← fee router → Gnosis Safe
+│   │   ├── Relayer.sol          ← Hyperlane IMessageRecipient + unlockCallback
+│   │   ├── interfaces/
+│   │   │   ├── IHyperlane.sol
+│   │   │   ├── IPyth.sol
+│   │   │   └── IChainlink.sol
+│   │   └── mocks/
+│   │       └── MockHyperlaneMailbox.sol   ← cross-chain test infra
 │   ├── script/
-│   │   ├── Deploy.s.sol
-│   │   └── MineHookAddress.s.sol
-│   └── test/
+│   │   ├── Deploy.s.sol                   (DeployBase / DeployEthereum / DeployBnb)
+│   │   ├── DeployMockMailboxes.s.sol
+│   │   ├── MineHookAddress.s.sol          ← CREATE2 salt miner
+│   │   ├── WireSisterDomains.s.sol        (WireBase / WireMainnet / WireBnb)
+│   │   ├── SeedLiquidity.s.sol
+│   │   ├── InitPoolWithLiquidity.s.sol    ← create V4 pool + add LP
+│   │   └── lib/EnvHelpers.sol             ← 0x-prefix tolerant private-key parser
+│   └── test/                              ← 70 tests passing
 │       ├── helpers/TestBase.sol
-│       └── MirrorVault.t.sol     (15/15 passing — hook tests deferred)
+│       ├── MirrorVault.t.sol              (15 tests)
+│       ├── MirrorFactory.t.sol            (8 tests)
+│       ├── Relayer.t.sol                  (16 tests)
+│       ├── Treasury.t.sol                 (12 tests)
+│       ├── MockHyperlaneMailbox.t.sol     (6 tests)
+│       └── integration/
+│           ├── ForkBase.t.sol             (9 fork tests against real Base V4)
+│           └── HookCallback.t.sol         (4 tests: real swap → hook callback)
 │
-├── packages/agents/             ← LangGraph TypeScript
+├── packages/agents/             ← LangGraph TypeScript, Claude Sonnet 4.6
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── src/
-│       ├── index.ts             ← main 45s cycle loop
-│       ├── graph.ts             ← LangGraph StateGraph
+│       ├── index.ts             ← 45s cycle loop, sync stdout
+│       ├── graph.ts             ← LangGraph StateGraph wiring all 4 agents
 │       ├── state.ts             ← types + Annotation
+│       ├── llm.ts               ← raw @anthropic-ai/sdk helpers (bypasses langchain top_p bug)
 │       ├── agents/
-│       │   ├── monitor.ts
-│       │   ├── rebalance.ts
-│       │   ├── coordinator.ts
-│       │   └── risk.ts
+│       │   ├── monitor.ts       ← per-chain pool state via tools, returns JSON
+│       │   ├── rebalance.ts     ← proposes deltas
+│       │   ├── coordinator.ts   ← validates + executes dispatchRebalance on-chain
+│       │   └── risk.ts          ← veto authority
 │       ├── tools/
-│       │   ├── poolState.ts     (viem)
-│       │   ├── hyperlane.ts
-│       │   └── redis.ts         (ioredis)
+│       │   ├── poolState.ts     ← viem reads via V4 StateView lens
+│       │   ├── hyperlane.ts     ← estimateFee / encodePayload / sendMessage
+│       │   └── redis.ts         ← optional history (graceful degradation)
 │       └── prompts/             ← hot-editable .md prompts
 │           ├── monitor.md
 │           ├── rebalance.md
@@ -256,7 +274,23 @@ mirrorAgents/
 │           ├── risk.md
 │           └── loader.ts
 │
-└── packages/frontend/           ← Next.js 15 (TBD)
+├── packages/frontend/           ← Next.js 15 (Phase 3 — not started)
+│
+└── scripts/                     ← end-to-end orchestration shell scripts
+    ├── anvil-mainnet.sh         ← single-chain Anvil fork (Ethereum)
+    ├── anvil-base.sh            ← single-chain Anvil fork (Base)
+    ├── anvil-bnb.sh             ← single-chain Anvil fork (BNB)
+    ├── anvil-all.sh             ← starts all 3 forks in parallel
+    ├── anvil-stop.sh            ← clean shutdown
+    ├── anvil-deploy-base.sh     ← deploy on Base fork only
+    ├── anvil-deploy-all.sh      ← deploy all 5 contracts × 3 chains
+    ├── anvil-deploy-cross-chain.sh   ← all 3 chains + MockHyperlaneMailbox
+    ├── anvil-wire-sisters.sh    ← register sister domains across chains
+    ├── anvil-init-pool-base.sh  ← fund tokens + initialize a V4 pool
+    ├── mock-hyperlane-relay.sh  ← bash daemon: watches dispatches, calls deliver
+    ├── test-full-flow.sh        ← deposit → cross-chain yield → harvest demo
+    ├── testnet-deploy-base-sepolia.sh  ← Phase 5 testnet deploy (Base Sepolia)
+    └── redis.sh                 ← docker container helper (optional)
 ```
 
 ## 10. Quick Start (Dev)
@@ -272,31 +306,79 @@ mirrorAgents/
 git clone https://github.com/sp0oby/mirv.git
 cd mirv
 cp .env.example .env
-# fill in ANTHROPIC_API_KEY, ALCHEMY_*_URL, etc.
+# Fill in ANTHROPIC_API_KEY, ALCHEMY_*_URL, etc. See SETUP.md for the full guide.
 
-# contracts
+# Contracts
 cd packages/contracts
-forge install   # already done if cloning fresh
+forge install     # installs forge-std, OpenZeppelin, uniswap-hooks
 forge build
-forge test      # 15/15 vault tests pass
+forge test        # 70/70 tests across 7 suites
 
-# agents
+# Agents
 cd ../agents
 yarn install
-npx tsc --noEmit   # confirms zero TS errors
-yarn dev          # starts the 45s agent loop (needs Redis + RPC keys)
+npx tsc --noEmit  # zero TS errors
 ```
 
-### Run a local Anvil fork
+### Full local 3-chain demo
 
 ```bash
-anvil --fork-url $ALCHEMY_BASE_URL --port 8546 &
-forge script script/Deploy.s.sol:DeployBase --rpc-url http://localhost:8546 --broadcast
+# From repo root:
+./scripts/anvil-deploy-cross-chain.sh    # spins up 3 Anvil forks + deploys mirv + MockMailbox + wires sisters
+./scripts/anvil-init-pool-base.sh         # fund tokens + create a V4 pool with our hook + add liquidity
+./scripts/mock-hyperlane-relay.sh --background    # start the cross-chain relay daemon
+
+# Now run the agents against the local forks:
+cd packages/agents
+ALCHEMY_MAINNET_URL=http://localhost:8545 \
+ALCHEMY_BASE_URL=http://localhost:8546 \
+ALCHEMY_BNB_URL=http://localhost:8547 \
+./node_modules/.bin/tsx src/index.ts
+# Watch agents poll each chain, call Claude, route through the StateGraph.
+
+# Stop everything:
+./scripts/anvil-stop.sh
 ```
 
-(Multi-chain Anvil testing is one of the next milestones — see `TODO.md` Phase 4.)
+### Run the full vault lifecycle (deposit → harvest)
+```bash
+./scripts/anvil-deploy-cross-chain.sh   # if not already running
+./scripts/test-full-flow.sh             # mints USDC, deposits, reports yield, harvests
+```
 
-## 11. Deployment Sequence
+## 11. Phase 5 — Testnet Deployment (next milestone)
+
+The local Anvil demo is proven. Phase 5 takes it to real testnets so we have a public
+contract address LPs can deposit against and the agents can run against real (testnet)
+Hyperlane relayers + Pyth + Chainlink — no mocks.
+
+### Order
+1. **Base Sepolia** first — primary chain, full vault stack
+2. **Ethereum Sepolia** — hook + relayer only
+3. **BNB Testnet** — hook + relayer only (verify V4 is deployed first)
+
+### Prerequisites
+| Need | Where |
+|---|---|
+| Sepolia ETH | https://www.alchemy.com/faucets/ethereum-sepolia or https://sepoliafaucet.com |
+| Base Sepolia ETH | https://www.alchemy.com/faucets/base-sepolia or Coinbase faucet |
+| BSC Testnet BNB | https://faucet.bnbchain.org |
+| Testnet USDC | Circle USDC testnet contracts (addresses in `.env.example`) |
+| Block explorer API keys | Etherscan / BaseScan / BSCScan (free tier OK) |
+
+### Run
+```bash
+# 1. Get testnet ETH on all 3 chains for your deployer wallet
+# 2. Add ALCHEMY_BASE_SEPOLIA_URL + BASESCAN_API_KEY to .env (testnet addrs already pre-filled)
+./scripts/testnet-deploy-base-sepolia.sh           # exists today
+# 3. (Phase 5 work) write similar scripts for ETH Sepolia + BNB Testnet
+```
+
+See `TODO.md` Phase 5 for the full punch list.
+
+---
+
+## 12. Deployment Sequence (Mainnet)
 
 ### 1. Mine hook addresses (per chain)
 ```bash
@@ -341,7 +423,7 @@ forge script script/Deploy.s.sol:DeployBnb \
 - Verify Redis is connected
 - Watch first 24h closely
 
-## 12. Security
+## 13. Security
 
 ### Approach
 - All contracts **immutable** (no upgrade risk)
@@ -365,7 +447,7 @@ The full 23-item Solidity security checklist (from `ethskills.com/security/SKILL
 - Mythril for symbolic execution on the hook + vault
 - Foundry fuzz (1000 runs) + invariants (256 runs) before each PR merges
 
-## 13. Tokenomics & Fees
+## 14. Tokenomics & Fees
 
 ### Vault performance fee
 - **15% of EXTRA yield only** — never on principal, never on normal LP returns
@@ -383,26 +465,33 @@ The full 23-item Solidity security checklist (from `ethskills.com/security/SKILL
 - Will include veTokenomics for fee discounts to long-term stakers
 - Early users earn points (offchain) redeemable for $MIRROR at launch
 
-## 14. Roadmap
+## 15. Roadmap
 
 See `TODO.md` for the full step-by-step build checklist. High-level milestones:
 
 | Phase | Status | Description |
 |---|---|---|
 | 0 | ✅ Done | Planning, architecture, all decisions locked |
-| 1 | 🟡 In Progress | Smart contracts (5/5 written, vault tests passing, hook tests + Slither pending) |
-| 2 | ✅ Mostly Done | AI agents (4/4 written, TS green, integration tests pending) |
+| 1 | ✅ Done | 5 contracts shipped, 70 tests passing, full Anvil deploy verified |
+| 2 | ✅ Done | 4 agents calling Claude Sonnet 4.6, universal V4 TVL math, conditional routing proven |
 | 3 | ⚪ Not Started | Frontend (Next.js scaffold + 6 pages) |
-| 4 | ⚪ Not Started | Local Anvil multi-chain testing |
-| 5 | ⚪ Not Started | Testnet deployment + 48h soak |
-| 6 | ⚪ Not Started | Audit + bug bounty setup |
-| 7 | 🟡 Ready | Grant pitch written; application pending |
-| 8 | ⚪ Not Started | Infrastructure provisioning |
-| 9 | ⚪ Not Started | Mainnet launch |
-| 10 | ⚪ Not Started | Public launch + integrations |
-| 11 | ⚪ Future | $MIRROR token (Phase 2) |
+| 4 | ✅ Done | 3-chain Anvil orchestration, MockHyperlane delivers cross-chain, vault lifecycle proven |
+| 5 | 🟡 **Next** | Testnet deployment (Base Sepolia → ETH Sepolia → BNB Testnet) |
+| 6 | ⚪ Not Started | Audit (Cantina) + Slither + Mythril + bug bounty |
+| 7 | 🟡 Pitch ready | `GRANT-APPLICATION.md` polished; submission pending |
+| 8 | ⚪ Not Started | Infra: Alchemy, Anthropic, Railway, Redis, Gnosis Safes, x402 proxy |
+| 9 | ⚪ Not Started | Mainnet launch (Base → Ethereum → BNB) |
+| 10 | ⚪ Not Started | Public launch + DefiLlama + Zapper + Bankr Skill |
+| 11 | ⚪ Future | $MIRROR token (governance + veTokenomics) |
 
-## 15. References
+### What's already proven
+- **Solidity:** all 5 contracts deploy on real Base V4 PoolManager (fork) with correct CREATE2-mined hook addresses. afterSwap / afterAddLiquidity / afterRemoveLiquidity callbacks all fire on real V4 swaps via fork tests.
+- **Agents:** Claude API integration via raw `@anthropic-ai/sdk` (bypasses a langchain default-args bug). Multi-round tool calling works. 3 parallel monitors per cycle.
+- **TVL math:** verified against the actual Ethereum mainnet ETH/USDC V4 pool (read $72k TVL) — same formula works on any chain.
+- **Cross-chain:** MockHyperlaneMailbox delivers messages between Anvil forks; production swap to real Hyperlane mailboxes is a single env-var change.
+- **Vault lifecycle:** USDC deposit → cross-chain yield report → 15% performance fee harvest → fee shares minted to treasury. All math verified.
+
+## 16. References
 
 - **Uniswap V4** — https://docs.uniswap.org/contracts/v4/overview
 - **OpenZeppelin uniswap-hooks** — https://github.com/OpenZeppelin/uniswap-hooks

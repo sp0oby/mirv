@@ -322,43 +322,63 @@
 
 ---
 
-## Phase 5 — Testnet Deployment
+## Phase 5 — Testnet Deployment (NEXT)
 
-### Get Testnet Assets
-- [ ] Sepolia ETH (faucet — Alchemy / pk910)
-- [ ] Base Sepolia ETH (Coinbase faucet)
-- [ ] BSC Testnet BNB (faucet.bnbchain.org)
-- [ ] Mock test USDC on each testnet
+**Goal:** Get mirv deployed on real public testnets so we have actual addresses LPs can deposit against, the agents run against real (testnet) Hyperlane + Pyth + Chainlink, and Phase 6 (audit) has concrete contracts to look at.
 
-### Deploy on Base Sepolia first
-- [ ] Mine hook address with mainnet PoolManager substituted for testnet one
-- [ ] `forge script DeployBase --rpc-url $ALCHEMY_BASE_SEPOLIA_URL --broadcast --verify`
-- [ ] Record addresses in `.env`
-- [ ] Verify on basescan.org testnet
+**Order (matches Phase 4 mainnet rollout):** Base Sepolia → Ethereum Sepolia → BNB Testnet.
 
-### Deploy on Ethereum Sepolia
-- [ ] Same pattern as Base
-- [ ] Register Hyperlane Mailbox testnet address
+### A. Prerequisites (user action — no code)
+- [ ] Get **Sepolia ETH** for deployer wallet (~0.5 ETH): https://www.alchemy.com/faucets/ethereum-sepolia
+- [ ] Get **Base Sepolia ETH** (~0.5 ETH): https://www.alchemy.com/faucets/base-sepolia
+- [ ] Get **BSC Testnet BNB** (~1 BNB): https://faucet.bnbchain.org (if pursuing BNB)
+- [ ] Add `ALCHEMY_BASE_SEPOLIA_URL` + `ALCHEMY_ETH_SEPOLIA_URL` + `ALCHEMY_BNB_TESTNET_URL` to `.env`
+- [ ] Add `BASESCAN_API_KEY` + `ETHERSCAN_API_KEY` + `BSCSCAN_API_KEY` to `.env` (each chain uses its own scanner)
+- [ ] **Verify testnet addresses** in `.env.example` against current docs:
+  - `POOL_MANAGER_BASE_SEPOLIA` (already populated, verify still current)
+  - `POOL_MANAGER_ETH_SEPOLIA` (already populated)
+  - `HYPERLANE_MAILBOX_BASE_SEPOLIA` / `_ETH_SEPOLIA`
+  - `PYTH_ADDRESS_BASE_SEPOLIA` / `_ETH_SEPOLIA`
+  - `CHAINLINK_ETH_USD_BASE_SEPOLIA` / `_ETH_SEPOLIA`
+- [ ] **Source testnet USDC addresses** and add to `.env`:
+  - Base Sepolia USDC (Circle): `0x036CbD53842c5426634e7929541eC2318f3dCF7e`
+  - ETH Sepolia USDC (Circle): `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`
+  - Get testnet USDC from https://faucet.circle.com (Circle's testnet faucet)
+- [ ] **Verify V4 is deployed on BNB Testnet** at developers.uniswap.org — may need to skip BNB for testnet
 
-### Deploy on BSC Testnet
-- [ ] Same pattern
+### B. Pre-deploy code work (no API credits needed)
+- [ ] **Update `testnet-deploy-base-sepolia.sh`**: parameterize the USDC address (currently hardcoded to mainnet), pull mailbox/pyth/chainlink from `.env`, add `--verify` flag for BaseScan
+- [ ] **Write `testnet-deploy-eth-sepolia.sh`**: mirrors the Base script for ETH Sepolia (Hook + Relayer only, no Vault on Ethereum)
+- [ ] **Write `testnet-deploy-bnb-testnet.sh`** (if V4 on BNB testnet): Hook + Relayer only
+- [ ] **Update `Deploy.s.sol`**: `DeployBase` reads USDC from `.env` (currently hardcoded to Base mainnet USDC `0x833589...`)
+- [ ] **Update agent token map** in `monitor.ts` to switch between mainnet/testnet token addresses based on a `NETWORK` env flag (`mainnet` | `sepolia`)
+- [ ] **Write `testnet-wire-sisters.sh`**: like the Anvil version, but using real testnet RPCs
 
-### Cross-Chain Wiring
-- [ ] `WireSisterDomains.s.sol` — register Base → Ethereum + BNB, etc.
-- [ ] Fund all 3 hooks with testnet ETH
-- [ ] Authorize a testnet agent wallet on all 3 hooks + vault
+### C. Deploy + wire (each step costs testnet ETH, not real money)
+- [ ] **Base Sepolia**: mine hook salt → deploy → verify on BaseScan → record addresses
+- [ ] **ETH Sepolia**: mine hook salt → deploy → verify on Etherscan → record addresses
+- [ ] **BNB Testnet** (if V4 there): mine hook salt → deploy → verify on BSCScan
+- [ ] Run `testnet-wire-sisters.sh` to register cross-chain recipients
+- [ ] Fund each hook with ~0.05 testnet ETH for Hyperlane dispatch fees
+- [ ] Authorize agent wallet on all hooks + vault + factory
 
-### Smoke Tests on Testnet
-- [ ] Make 5 deposits from 3 wallets
-- [ ] Trigger swaps, observe Hyperlane dispatches in explorer
-- [ ] Verify Relayer receives + executes on remote chains
-- [ ] Run agent loop pointing at testnet RPCs for 48 hours
-- [ ] Trigger manual harvest, verify performance fee mints to treasury
-- [ ] Test pause/unpause from RiskAgent
+### D. Smoke tests on testnet (small cost in Claude credits)
+- [ ] Deposit testnet USDC into the Base Sepolia vault from 2-3 separate wallets
+- [ ] Manually trigger a Hyperlane dispatch via cast → verify message appears on Hyperlane explorer (https://explorer.hyperlane.xyz)
+- [ ] Verify Relayer.handle is called on ETH Sepolia (real Hyperlane relayers, not mock)
+- [ ] Run the agent loop for 1-2 hours pointing at testnet RPCs — observe Claude calls + decision flow
+- [ ] Test `harvest()` after simulated yield report — verify treasury receives fee shares
+- [ ] Test `pause()` from RiskAgent — verify hook stops dispatching
+
+### E. Documentation
+- [ ] Update `README.md` Phase 5 section with deployed addresses + testnet explorer links
+- [ ] Add a "Try it on testnet" section to `README.md` with deposit instructions
+- [ ] Capture screenshots of Hyperlane explorer showing cross-chain messages for the grant pitch
 
 ### Performance Validation
-- [ ] Capture: avg rebalance latency, gas cost per rebalance, agent decision quality
-- [ ] Compare mirrored APY vs single-chain baseline
+- [ ] Avg rebalance latency end-to-end (dispatch → delivery → execute)
+- [ ] Gas cost per rebalance on each chain
+- [ ] Compare mirrored APY vs single-chain baseline over the soak period
 - [ ] Fix any bugs surfaced
 
 ---
