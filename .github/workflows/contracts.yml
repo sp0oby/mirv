@@ -27,10 +27,10 @@ jobs:
           version: nightly
 
       - name: Install Solidity dependencies
-        # .gitmodules lives at packages/contracts/.gitmodules (nested), so the
-        # checkout@v4 submodules:recursive flag doesn't reach it. Re-init manually.
+        # lib/ is gitignored — forge dependencies aren't checked in. Re-install them
+        # from the URLs listed in packages/contracts/.gitmodules.
         run: |
-          git -c protocol.version=2 submodule update --init --recursive --depth 1
+          forge install --no-git foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts OpenZeppelin/uniswap-hooks
 
       - name: forge fmt --check
         run: forge fmt --check
@@ -65,7 +65,7 @@ jobs:
           version: nightly
 
       - name: Install Solidity dependencies
-        run: git -c protocol.version=2 submodule update --init --recursive --depth 1
+        run: forge install --no-git foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts OpenZeppelin/uniswap-hooks
 
       - uses: actions/setup-python@v5
         with:
