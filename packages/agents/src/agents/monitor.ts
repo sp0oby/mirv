@@ -205,11 +205,18 @@ export async function runMonitorAgent(
 
   // Chain-appropriate token addresses (currency0 must be < currency1 for V4).
   // All three chains use the canonical ETH + USDC pair for the mirv protocol.
-  const tokens: Record<Chain, { token0: string; token1: string; }> = {
+  // Toggled by NETWORK env var: "mainnet" (default) | "sepolia"
+  const MAINNET_TOKENS: Record<Chain, { token0: string; token1: string; }> = {
     ethereum: { token0: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", token1: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" }, // USDC < WETH on mainnet
     base:     { token0: "0x4200000000000000000000000000000000000006", token1: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" }, // WETH < USDC on Base
     bnb:      { token0: "0x2170Ed0880ac9A755fd29B2688956BD959F933F8", token1: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d" }, // ETH-bep < USDC-bep on BNB
   };
+  const SEPOLIA_TOKENS: Record<Chain, { token0: string; token1: string; }> = {
+    ethereum: { token0: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", token1: "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14" }, // USDC < WETH on Sepolia
+    base:     { token0: "0x4200000000000000000000000000000000000006", token1: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" }, // WETH < USDC on Base Sepolia
+    bnb:      { token0: "0x0000000000000000000000000000000000000000", token1: "0x0000000000000000000000000000000000000000" }, // V4 not on BNB testnet
+  };
+  const tokens = process.env.NETWORK === "sepolia" ? SEPOLIA_TOKENS : MAINNET_TOKENS;
 
   const t = tokens[chain];
   const prompt = `Monitor the ETH/USDC pool on ${chain}.

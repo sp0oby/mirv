@@ -25,9 +25,6 @@ bytes32 constant PYTH_ETH_USD_ID = 0xff61491a931112ddf1bd8147cd1b641375f79f58251
 
 // ─── Base deployment ──────────────────────────────────────────────────────────
 contract DeployBase is Script {
-    // Base USDC — vault accepts this as the primary asset
-    address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
-
     function run() external {
         uint256 deployerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
         address deployer    = vm.addr(deployerKey);
@@ -36,6 +33,9 @@ contract DeployBase is Script {
         address poolMgr     = vm.envAddress("POOL_MANAGER_BASE");
         address pyth        = vm.envAddress("PYTH_ADDRESS_BASE");
         address chainlink   = vm.envAddress("CHAINLINK_ETH_USD_BASE");
+        // Vault accepts this token. Mainnet = USDC; testnet = Circle testnet USDC.
+        // Override via VAULT_ASSET_BASE in .env or wrapper script.
+        address vaultAsset  = vm.envAddress("VAULT_ASSET_BASE");
         bytes32 hookSalt    = bytes32(vm.envUint("HOOK_SALT_BASE"));
 
         vm.startBroadcast(deployerKey);
@@ -54,7 +54,7 @@ contract DeployBase is Script {
         console2.log("MirrorHook (Base):", address(hook));
 
         MirrorVault vault = new MirrorVault(
-            IERC20(USDC),
+            IERC20(vaultAsset),
             address(treasury),
             deployer,
             "mirv ETH/USDC Vault",

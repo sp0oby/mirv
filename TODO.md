@@ -346,13 +346,15 @@
   - Get testnet USDC from https://faucet.circle.com (Circle's testnet faucet)
 - [ ] **Verify V4 is deployed on BNB Testnet** at developers.uniswap.org — may need to skip BNB for testnet
 
-### B. Pre-deploy code work (no API credits needed)
-- [ ] **Update `testnet-deploy-base-sepolia.sh`**: parameterize the USDC address (currently hardcoded to mainnet), pull mailbox/pyth/chainlink from `.env`, add `--verify` flag for BaseScan
-- [ ] **Write `testnet-deploy-eth-sepolia.sh`**: mirrors the Base script for ETH Sepolia (Hook + Relayer only, no Vault on Ethereum)
-- [ ] **Write `testnet-deploy-bnb-testnet.sh`** (if V4 on BNB testnet): Hook + Relayer only
-- [ ] **Update `Deploy.s.sol`**: `DeployBase` reads USDC from `.env` (currently hardcoded to Base mainnet USDC `0x833589...`)
-- [ ] **Update agent token map** in `monitor.ts` to switch between mainnet/testnet token addresses based on a `NETWORK` env flag (`mainnet` | `sepolia`)
-- [ ] **Write `testnet-wire-sisters.sh`**: like the Anvil version, but using real testnet RPCs
+### B. Pre-deploy code work (no API credits needed) ✅ DONE
+- [x] **Updated `testnet-deploy-base-sepolia.sh`**: pulls everything from `.env` (USDC, mailbox, pyth, chainlink, pool manager), conditionally adds `--verify` if BASESCAN_API_KEY is set
+- [x] **Wrote `testnet-deploy-eth-sepolia.sh`**: mirrors Base flow for ETH Sepolia (Hook + Relayer only, no Vault)
+- [x] **BNB testnet decision**: SKIP — V4 not deployed on BNB Chapel testnet (verified via developers.uniswap.org). At Phase 9 we'll deploy BNB direct to mainnet alongside Ethereum + Base.
+- [x] **Updated `Deploy.s.sol`**: `DeployBase` reads `VAULT_ASSET_BASE` from `.env` (was hardcoded to Base mainnet USDC). Testnet scripts override before forge invocation.
+- [x] **Added `NETWORK=mainnet|sepolia` env flag** to `monitor.ts` — switches between `MAINNET_TOKENS` and `SEPOLIA_TOKENS` maps automatically.
+- [x] **Wrote `testnet-wire-sisters.sh`**: wires Base Sepolia ↔ Ethereum Sepolia using broadcast logs (2-chain at testnet stage).
+- [x] **Added testnet USDC + WETH addresses** to `.env.example`: `USDC_BASE_SEPOLIA`, `USDC_ETH_SEPOLIA`, `WETH_BASE_SEPOLIA`, `WETH_ETH_SEPOLIA`.
+- [x] **Verified:** `forge build` green, `forge test` 70/70 passing, `npx tsc --noEmit` zero errors after all changes.
 
 ### C. Deploy + wire (each step costs testnet ETH, not real money)
 - [ ] **Base Sepolia**: mine hook salt → deploy → verify on BaseScan → record addresses

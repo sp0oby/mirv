@@ -1,0 +1,81 @@
+name: contracts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/contracts/**"
+      - ".github/workflows/contracts.yml"
+  pull_request:
+    paths:
+      - "packages/contracts/**"
+
+jobs:
+  build-and-test:
+    name: Build + Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/contracts
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: forge fmt --check
+        run: forge fmt --check
+        continue-on-error: true   # Don't fail CI on formatting; surface as a warning
+
+      - name: forge build
+        run: forge build --sizes
+
+      - name: forge test
+        run: forge test -vv
+
+      - name: Storage layout snapshot
+        run: |
+          forge inspect MirrorVault storageLayout > /tmp/vault-storage.txt
+          forge inspect MirrorHook  storageLayout > /tmp/hook-storage.txt
+          echo "Storage layouts captured (would diff against baseline in real CI)"
+
+  slither:
+    name: Slither static analysis
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/contracts
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install slither
+        run: pip install slither-analyzer
+
+      - name: forge build (slither needs artifacts)
+        run: forge build
+
+      - name: Run Slither
+        # Whitelisting low-level-calls because V4 hook callbacks require them.
+        # Exit 0 even on findings — we triage manually until baseline is clean.
+        run: |
+          slither . \
+            --filter-paths "lib/|test/|script/" \
+            --exclude low-level-calls \
+            --exclude-informational || true

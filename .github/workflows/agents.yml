@@ -1,0 +1,32 @@
+name: agents
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/agents/**"
+      - "package.json"
+      - ".github/workflows/agents.yml"
+  pull_request:
+    paths:
+      - "packages/agents/**"
+
+jobs:
+  typecheck:
+    name: TypeScript + lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: tsc --noEmit (agents)
+        working-directory: packages/agents
+        run: npx tsc --noEmit
