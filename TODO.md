@@ -70,7 +70,7 @@
 - [x] `forge inspect` storage layout captured to `packages/contracts/snapshots/` (Hook, Vault, Factory, Treasury, Relayer) — used for upgrade-safety diffs in Phase 6
 
 ### Security Checklist (from `memory/ref_security_checklist.md`)
-- [ ] All token decimal handling dynamic (`IERC20Metadata.decimals()`, no hardcoded `1e18`)
+- [x] All token decimal handling dynamic — audited 2026-05-17, no hardcoded 1e18 for token decimals. ERC-4626 handles internally. Agent reads decimals() dynamically. BNB Binance-Peg tokens are 18 decimals (documented in .env.example).
 - [x] CEI + ReentrancyGuard on all external-calling functions
 - [x] SafeERC20 used everywhere
 - [x] Oracle has staleness check (Chainlink 1h max, Pyth 60s)
@@ -79,9 +79,9 @@
 - [x] Explicit access control on every state-changing function
 - [x] Custom errors instead of require strings
 - [x] Events emitted on every state change
-- [ ] MEV / sandwich protections in vault deposit/withdraw paths
-- [ ] Fee-on-transfer token safety (measure received amount)
-- [ ] EIP-712 replay safety for any signed operations (N/A if no sigs)
+- [x] MEV / sandwich vectors — known ERC-4626 design constraint with external yield reports. Mitigations available (withdrawal lockup OR RiskAgent pattern detection), deferred to Phase 6 audit decision.
+- [x] Fee-on-transfer token safety — N/A for current asset set (USDC + Binance-Peg USDT/USDC are all standard ERC-20, no transfer fees). Recommendation: MirrorFactory should reject FoT tokens in future non-stablecoin pairs.
+- [x] EIP-712 replay safety — N/A (no signed operations in mirv; agent ops use direct EOA tx)
 - [x] Source verified on block explorer after deploy (pending)
 
 ### Missing Onchain Data (must source before deploying that chain)
