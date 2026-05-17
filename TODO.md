@@ -147,6 +147,13 @@
 - [ ] Integrate `aeon-defi-overview` — feed daily DeFi regime call (RISK-ON / NEUTRAL / RISK-OFF) into RiskAgent
 - [ ] Consider ERC-8004 agent identity registration for CoordinatorAgent (transparency + reputation)
 
+**📝 Note on Bankr accounts:** A single **developer/protocol** Bankr account is enough — there is NEVER a per-agent Bankr account in this design.
+- `aeon-vuln-scanner` (Phase 6): your dev account, run once before audit
+- `aeon-defi-monitor` / `aeon-defi-overview` (Phase 2.5): one protocol account, all 4 agents consume the data through shared API calls
+- Bankr Skill publishing (Phase 10): one team account, owns the public skill listing
+- x402 proxy for Claude credits (Phase 8): protocol treasury, one service for all agents
+The mirv agents use a shared **Anthropic** API key + a single shared `AGENT_PRIVATE_KEY` for on-chain signing. They don't have individual Bankr identities until/unless Phase 11 stretch adds ERC-8004 agent identities.
+
 ---
 
 ## Phase 3 — Frontend
@@ -428,9 +435,11 @@
 - [ ] Gnosis Safe set up on each of 3 chains (Treasury recipient)
 
 ### CI/CD
-- [x] `.github/workflows/contracts.yml` — `forge fmt --check`, `forge build --sizes`, `forge test`, storage layout snapshot, Slither (separate job)
+- [x] `.github/workflows/contracts.yml` — `forge fmt --check`, `forge build --sizes`, `forge test` (skips fork tests in CI since no RPC), storage layout snapshot, Slither (separate job)
 - [x] `.github/workflows/agents.yml` — `tsc --noEmit` on agent changes
 - [ ] `.github/workflows/frontend.yml` — `next build`, type-check (Phase 3 will add this)
+
+**Bug fix (commit pending):** Initial workflow run failed because `.gitmodules` is nested at `packages/contracts/.gitmodules` and `actions/checkout@v4`'s `submodules: recursive` only reads root `.gitmodules`. Added explicit `git submodule update --init --recursive --depth 1` step. Fork tests excluded from CI via `--no-match-contract` since they need an Alchemy RPC URL.
 - [ ] Branch protection on `main` — require all CI green
 - [ ] Auto-deploy agents to Railway on `main` push (after manual approval)
 
