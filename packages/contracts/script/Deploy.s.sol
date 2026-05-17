@@ -27,44 +27,31 @@ bytes32 constant PYTH_ETH_USD_ID = 0xff61491a931112ddf1bd8147cd1b641375f79f58251
 contract DeployBase is Script {
     function run() external {
         uint256 deployerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
-        address deployer    = vm.addr(deployerKey);
-        address safe        = vm.envAddress("TREASURY_SAFE");
-        address mailbox     = vm.envAddress("HYPERLANE_MAILBOX_BASE");
-        address poolMgr     = vm.envAddress("POOL_MANAGER_BASE");
-        address pyth        = vm.envAddress("PYTH_ADDRESS_BASE");
-        address chainlink   = vm.envAddress("CHAINLINK_ETH_USD_BASE");
+        address deployer = vm.addr(deployerKey);
+        address safe = vm.envAddress("TREASURY_SAFE");
+        address mailbox = vm.envAddress("HYPERLANE_MAILBOX_BASE");
+        address poolMgr = vm.envAddress("POOL_MANAGER_BASE");
+        address pyth = vm.envAddress("PYTH_ADDRESS_BASE");
+        address chainlink = vm.envAddress("CHAINLINK_ETH_USD_BASE");
         // Vault accepts this token. Mainnet = USDC; testnet = Circle testnet USDC.
         // Override via VAULT_ASSET_BASE in .env or wrapper script.
-        address vaultAsset  = vm.envAddress("VAULT_ASSET_BASE");
-        bytes32 hookSalt    = bytes32(vm.envUint("HOOK_SALT_BASE"));
+        address vaultAsset = vm.envAddress("VAULT_ASSET_BASE");
+        bytes32 hookSalt = bytes32(vm.envUint("HOOK_SALT_BASE"));
 
         vm.startBroadcast(deployerKey);
 
         Treasury treasury = new Treasury(safe, deployer);
         console2.log("Treasury:", address(treasury));
 
-        MirrorHook hook = new MirrorHook{salt: hookSalt}(
-            IPoolManager(poolMgr),
-            mailbox,
-            pyth,
-            chainlink,
-            PYTH_ETH_USD_ID,
-            deployer
-        );
+        MirrorHook hook =
+            new MirrorHook{salt: hookSalt}(IPoolManager(poolMgr), mailbox, pyth, chainlink, PYTH_ETH_USD_ID, deployer);
         console2.log("MirrorHook (Base):", address(hook));
 
-        MirrorVault vault = new MirrorVault(
-            IERC20(vaultAsset),
-            address(treasury),
-            deployer,
-            "mirv ETH/USDC Vault",
-            "mirvETH-USDC"
-        );
+        MirrorVault vault =
+            new MirrorVault(IERC20(vaultAsset), address(treasury), deployer, "mirv ETH/USDC Vault", "mirvETH-USDC");
         console2.log("MirrorVault (Base):", address(vault));
 
-        MirrorFactory factory = new MirrorFactory(
-            poolMgr, mailbox, pyth, address(treasury), deployer
-        );
+        MirrorFactory factory = new MirrorFactory(poolMgr, mailbox, pyth, address(treasury), deployer);
         console2.log("MirrorFactory:", address(factory));
 
         address agentWallet = vm.envAddress("AGENT_WALLET");
@@ -75,10 +62,10 @@ contract DeployBase is Script {
         vm.stopBroadcast();
 
         console2.log("\n=== Add to .env ===");
-        console2.log("MIRROR_HOOK_BASE=",    address(hook));
-        console2.log("MIRROR_VAULT_BASE=",   address(vault));
+        console2.log("MIRROR_HOOK_BASE=", address(hook));
+        console2.log("MIRROR_VAULT_BASE=", address(vault));
         console2.log("MIRROR_FACTORY_BASE=", address(factory));
-        console2.log("TREASURY_BASE=",       address(treasury));
+        console2.log("TREASURY_BASE=", address(treasury));
     }
 }
 
@@ -86,23 +73,17 @@ contract DeployBase is Script {
 contract DeployEthereum is Script {
     function run() external {
         uint256 deployerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
-        address deployer    = vm.addr(deployerKey);
-        address mailbox     = vm.envAddress("HYPERLANE_MAILBOX_MAINNET");
-        address poolMgr     = vm.envAddress("POOL_MANAGER_MAINNET");
-        address pyth        = vm.envAddress("PYTH_ADDRESS_MAINNET");
-        address chainlink   = vm.envAddress("CHAINLINK_ETH_USD_MAINNET");
-        bytes32 hookSalt    = bytes32(vm.envUint("HOOK_SALT_MAINNET"));
+        address deployer = vm.addr(deployerKey);
+        address mailbox = vm.envAddress("HYPERLANE_MAILBOX_MAINNET");
+        address poolMgr = vm.envAddress("POOL_MANAGER_MAINNET");
+        address pyth = vm.envAddress("PYTH_ADDRESS_MAINNET");
+        address chainlink = vm.envAddress("CHAINLINK_ETH_USD_MAINNET");
+        bytes32 hookSalt = bytes32(vm.envUint("HOOK_SALT_MAINNET"));
 
         vm.startBroadcast(deployerKey);
 
-        MirrorHook hook = new MirrorHook{salt: hookSalt}(
-            IPoolManager(poolMgr),
-            mailbox,
-            pyth,
-            chainlink,
-            PYTH_ETH_USD_ID,
-            deployer
-        );
+        MirrorHook hook =
+            new MirrorHook{salt: hookSalt}(IPoolManager(poolMgr), mailbox, pyth, chainlink, PYTH_ETH_USD_ID, deployer);
         console2.log("MirrorHook (Ethereum):", address(hook));
 
         Relayer relayer = new Relayer(poolMgr, mailbox, deployer);
@@ -115,7 +96,7 @@ contract DeployEthereum is Script {
 
         console2.log("\n=== Add to .env ===");
         console2.log("MIRROR_HOOK_MAINNET=", address(hook));
-        console2.log("RELAYER_MAINNET=",     address(relayer));
+        console2.log("RELAYER_MAINNET=", address(relayer));
     }
 }
 
@@ -123,23 +104,17 @@ contract DeployEthereum is Script {
 contract DeployBnb is Script {
     function run() external {
         uint256 deployerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
-        address deployer    = vm.addr(deployerKey);
-        address mailbox     = vm.envAddress("HYPERLANE_MAILBOX_BNB");
-        address poolMgr     = vm.envAddress("POOL_MANAGER_BNB");
-        address pyth        = vm.envAddress("PYTH_ADDRESS_BNB");
-        address chainlink   = vm.envAddress("CHAINLINK_ETH_USD_BNB");
-        bytes32 hookSalt    = bytes32(vm.envUint("HOOK_SALT_BNB"));
+        address deployer = vm.addr(deployerKey);
+        address mailbox = vm.envAddress("HYPERLANE_MAILBOX_BNB");
+        address poolMgr = vm.envAddress("POOL_MANAGER_BNB");
+        address pyth = vm.envAddress("PYTH_ADDRESS_BNB");
+        address chainlink = vm.envAddress("CHAINLINK_ETH_USD_BNB");
+        bytes32 hookSalt = bytes32(vm.envUint("HOOK_SALT_BNB"));
 
         vm.startBroadcast(deployerKey);
 
-        MirrorHook hook = new MirrorHook{salt: hookSalt}(
-            IPoolManager(poolMgr),
-            mailbox,
-            pyth,
-            chainlink,
-            PYTH_ETH_USD_ID,
-            deployer
-        );
+        MirrorHook hook =
+            new MirrorHook{salt: hookSalt}(IPoolManager(poolMgr), mailbox, pyth, chainlink, PYTH_ETH_USD_ID, deployer);
         console2.log("MirrorHook (BNB):", address(hook));
 
         Relayer relayer = new Relayer(poolMgr, mailbox, deployer);
@@ -152,6 +127,6 @@ contract DeployBnb is Script {
 
         console2.log("\n=== Add to .env ===");
         console2.log("MIRROR_HOOK_BNB=", address(hook));
-        console2.log("RELAYER_BNB=",     address(relayer));
+        console2.log("RELAYER_BNB=", address(relayer));
     }
 }

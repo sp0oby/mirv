@@ -19,20 +19,13 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 /// @dev The factory does NOT mine hook addresses — that must be done off-chain via
 ///      MineHookAddress.s.sol before calling deployPair. Pass the pre-computed salt.
 contract MirrorFactory is Ownable {
-
     // ─── Errors ─────────────────────────────────────────────────────────────
     error PairAlreadyDeployed();
     error ZeroAddress();
     error NotAuthorizedAgent();
 
     // ─── Events ─────────────────────────────────────────────────────────────
-    event PairDeployed(
-        bytes32 indexed pairId,
-        address hook,
-        address vault,
-        address token0,
-        address token1
-    );
+    event PairDeployed(bytes32 indexed pairId, address hook, address vault, address token0, address token1);
     event AgentAuthorizationUpdated(address indexed agent, bool authorized);
 
     // ─── Types ───────────────────────────────────────────────────────────────
@@ -46,30 +39,27 @@ contract MirrorFactory is Ownable {
 
     // ─── State ───────────────────────────────────────────────────────────────
     IPoolManager public immutable poolManager;
-    address       public immutable mailbox;
-    address       public immutable pyth;
-    address       public immutable treasury;
+    address public immutable mailbox;
+    address public immutable pyth;
+    address public immutable treasury;
 
     mapping(bytes32 => DeployedPair) public deployedPairs;
-    mapping(address => bool)         public authorizedAgents;
+    mapping(address => bool) public authorizedAgents;
 
     /// @dev Pairs indexed for enumeration
     bytes32[] public allPairIds;
 
     // ─── Constructor ─────────────────────────────────────────────────────────
-    constructor(
-        address _poolManager,
-        address _mailbox,
-        address _pyth,
-        address _treasury,
-        address _owner
-    ) Ownable(_owner) {
-        if (_poolManager == address(0) || _mailbox == address(0) ||
-            _pyth == address(0) || _treasury == address(0)) revert ZeroAddress();
+    constructor(address _poolManager, address _mailbox, address _pyth, address _treasury, address _owner)
+        Ownable(_owner)
+    {
+        if (_poolManager == address(0) || _mailbox == address(0) || _pyth == address(0) || _treasury == address(0)) {
+            revert ZeroAddress();
+        }
         poolManager = IPoolManager(_poolManager);
-        mailbox     = _mailbox;
-        pyth        = _pyth;
-        treasury    = _treasury;
+        mailbox = _mailbox;
+        pyth = _pyth;
+        treasury = _treasury;
     }
 
     // ─── Deploy ───────────────────────────────────────────────────────────────
@@ -90,8 +80,8 @@ contract MirrorFactory is Ownable {
         address chainlinkFeed,
         bytes32 pythFeedId,
         bytes32 hookSalt,
-        uint24  feeTier,
-        int24   tickSpacing
+        uint24 feeTier,
+        int24 tickSpacing
     ) external returns (address hook, address vault) {
         if (!authorizedAgents[msg.sender]) revert NotAuthorizedAgent();
         if (token0 == address(0) || token1 == address(0)) revert ZeroAddress();
@@ -100,37 +90,24 @@ contract MirrorFactory is Ownable {
         if (deployedPairs[pairId].hook != address(0)) revert PairAlreadyDeployed();
 
         // Deploy MirrorHook via CREATE2 using pre-mined salt
-        hook = address(new MirrorHook{salt: hookSalt}(
-            poolManager,
-            mailbox,
-            pyth,
-            chainlinkFeed,
-            pythFeedId,
-            owner()
-        ));
+        hook = address(new MirrorHook{salt: hookSalt}(poolManager, mailbox, pyth, chainlinkFeed, pythFeedId, owner()));
 
         // Build vault name/symbol from token metadata
         string memory sym0 = IERC20Metadata(token0).symbol();
         string memory sym1 = IERC20Metadata(token1).symbol();
-        string memory vaultName   = string.concat("Mirror ", sym0, "/", sym1, " Vault");
+        string memory vaultName = string.concat("Mirror ", sym0, "/", sym1, " Vault");
         string memory vaultSymbol = string.concat("mirv", sym0, "-", sym1);
 
         // Deploy MirrorVault with token0 as the primary deposit asset
-        vault = address(new MirrorVault(
-            IERC20(token0),
-            treasury,
-            owner(),
-            vaultName,
-            vaultSymbol
-        ));
+        vault = address(new MirrorVault(IERC20(token0), treasury, owner(), vaultName, vaultSymbol));
 
         // Initialize the V4 pool
         PoolKey memory key = PoolKey({
-            currency0:   Currency.wrap(token0),
-            currency1:   Currency.wrap(token1),
-            fee:         feeTier,
+            currency0: Currency.wrap(token0),
+            currency1: Currency.wrap(token1),
+            fee: feeTier,
             tickSpacing: tickSpacing,
-            hooks:       IHooks(hook)
+            hooks: IHooks(hook)
         });
         poolManager.initialize(key, 79228162514264337593543950336); // sqrtPriceX96 = 1.0
 
@@ -142,7 +119,9 @@ contract MirrorFactory is Ownable {
 
     // ─── View ─────────────────────────────────────────────────────────────────
 
-    function pairCount() external view returns (uint256) { return allPairIds.length; }
+    function pairCount() external view returns (uint256) {
+        return allPairIds.length;
+    }
 
     function getPair(bytes32 pairId) external view returns (DeployedPair memory) {
         return deployedPairs[pairId];

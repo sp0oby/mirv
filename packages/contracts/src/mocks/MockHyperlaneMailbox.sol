@@ -43,21 +43,17 @@ contract MockHyperlaneMailbox is IMailbox {
     }
 
     /// @notice Mock: always returns 0 — no fee charged in tests
-    function quoteDispatch(uint32, bytes32, bytes calldata)
-        external
-        pure
-        override
-        returns (uint256)
-    {
+    function quoteDispatch(uint32, bytes32, bytes calldata) external pure override returns (uint256) {
         return 0;
     }
 
     /// @notice Records the dispatch and emits an event for the relay daemon
-    function dispatch(
-        uint32 destinationDomain,
-        bytes32 recipient,
-        bytes calldata messageBody
-    ) external payable override returns (bytes32 messageId) {
+    function dispatch(uint32 destinationDomain, bytes32 recipient, bytes calldata messageBody)
+        external
+        payable
+        override
+        returns (bytes32 messageId)
+    {
         bytes32 sender = bytes32(uint256(uint160(msg.sender)));
         messageId = keccak256(abi.encode(messageCount, destinationDomain, recipient, sender, messageBody));
         emit Dispatch(messageCount, destinationDomain, recipient, sender, messageBody);
@@ -69,12 +65,7 @@ contract MockHyperlaneMailbox is IMailbox {
     /// @param sender       Source sender as bytes32 (taken from the source Dispatch event)
     /// @param recipient    Destination contract that implements IMessageRecipient
     /// @param messageBody  Raw payload bytes
-    function deliver(
-        uint32 origin,
-        bytes32 sender,
-        bytes32 recipient,
-        bytes calldata messageBody
-    ) external payable {
+    function deliver(uint32 origin, bytes32 sender, bytes32 recipient, bytes calldata messageBody) external payable {
         address recipientAddr = address(uint160(uint256(recipient)));
         try IMessageRecipient(recipientAddr).handle{value: msg.value}(origin, sender, messageBody) {
             emit Delivered(origin, sender, recipient);

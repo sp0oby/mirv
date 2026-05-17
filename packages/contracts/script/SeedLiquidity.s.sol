@@ -21,12 +21,12 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 contract SeedBase is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
-        address deployer    = vm.addr(deployerKey);
+        address deployer = vm.addr(deployerKey);
 
-        MirrorHook  hook   = MirrorHook(payable(vm.envAddress("MIRROR_HOOK_BASE")));
-        MirrorVault vault  = MirrorVault(vm.envAddress("MIRROR_VAULT_BASE"));
-        IERC20      asset  = IERC20(vault.asset());
-        uint256     seed   = vm.envOr("SEED_AMOUNT_USDC", uint256(10_000e6)); // default 10k USDC
+        MirrorHook hook = MirrorHook(payable(vm.envAddress("MIRROR_HOOK_BASE")));
+        MirrorVault vault = MirrorVault(vm.envAddress("MIRROR_VAULT_BASE"));
+        IERC20 asset = IERC20(vault.asset());
+        uint256 seed = vm.envOr("SEED_AMOUNT_USDC", uint256(10_000e6)); // default 10k USDC
 
         vm.startBroadcast(deployerKey);
 

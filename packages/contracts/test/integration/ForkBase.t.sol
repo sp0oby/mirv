@@ -19,22 +19,22 @@ import {Treasury} from "../../src/Treasury.sol";
 /// Run: `source .env && forge test --match-contract ForkBaseTest -vv`
 contract ForkBaseTest is Test {
     // Base mainnet verified addresses
-    address constant POOL_MANAGER      = 0x498581fF718922c3f8e6A244956aF099B2652b2b;
+    address constant POOL_MANAGER = 0x498581fF718922c3f8e6A244956aF099B2652b2b;
     address constant HYPERLANE_MAILBOX = 0xeA87ae93Fa0019a82A727bfd3eBd1cFCa8f64f1D;
-    address constant PYTH              = 0x8250f4aF4B972684F7b336503E2D6dFeDeB1487a;
+    address constant PYTH = 0x8250f4aF4B972684F7b336503E2D6dFeDeB1487a;
     address constant CHAINLINK_ETH_USD = 0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70;
-    address constant USDC              = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
-    address constant WETH              = 0x4200000000000000000000000000000000000006;
-    bytes32 constant PYTH_ETH_USD_ID   = 0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace;
+    address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+    address constant WETH = 0x4200000000000000000000000000000000000006;
+    bytes32 constant PYTH_ETH_USD_ID = 0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace;
 
     address internal owner = makeAddr("owner");
     address internal agent = makeAddr("agent");
     address internal alice = makeAddr("alice");
-    address internal safe  = makeAddr("safe");
+    address internal safe = makeAddr("safe");
 
-    MirrorHook    internal hook;
-    MirrorVault   internal vault;
-    Treasury      internal treasury;
+    MirrorHook internal hook;
+    MirrorVault internal vault;
+    Treasury internal treasury;
     MirrorFactory internal factory;
 
     function setUp() public {
@@ -58,47 +58,23 @@ contract ForkBaseTest is Test {
         treasury = new Treasury(safe, owner);
 
         // 2. Mine hook address using HookMiner (uses address(this) as the CREATE2 deployer)
-        uint160 flags = uint160(
-            Hooks.AFTER_SWAP_FLAG
-            | Hooks.AFTER_ADD_LIQUIDITY_FLAG
-            | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
-        );
+        uint160 flags =
+            uint160(Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG);
 
-        bytes memory constructorArgs = abi.encode(
-            IPoolManager(POOL_MANAGER),
-            HYPERLANE_MAILBOX,
-            PYTH,
-            CHAINLINK_ETH_USD,
-            PYTH_ETH_USD_ID,
-            owner
-        );
+        bytes memory constructorArgs =
+            abi.encode(IPoolManager(POOL_MANAGER), HYPERLANE_MAILBOX, PYTH, CHAINLINK_ETH_USD, PYTH_ETH_USD_ID, owner);
 
-        (address predicted, bytes32 salt) = HookMiner.find(
-            address(this),
-            flags,
-            type(MirrorHook).creationCode,
-            constructorArgs
-        );
+        (address predicted, bytes32 salt) =
+            HookMiner.find(address(this), flags, type(MirrorHook).creationCode, constructorArgs);
 
         // 3. Deploy hook via CREATE2 at the mined address
         hook = new MirrorHook{salt: salt}(
-            IPoolManager(POOL_MANAGER),
-            HYPERLANE_MAILBOX,
-            PYTH,
-            CHAINLINK_ETH_USD,
-            PYTH_ETH_USD_ID,
-            owner
+            IPoolManager(POOL_MANAGER), HYPERLANE_MAILBOX, PYTH, CHAINLINK_ETH_USD, PYTH_ETH_USD_ID, owner
         );
         assertEq(address(hook), predicted, "Hook deployed at wrong address");
 
         // 4. Deploy Vault
-        vault = new MirrorVault(
-            IERC20(USDC),
-            address(treasury),
-            owner,
-            "mirv ETH/USDC Vault",
-            "mirvETH-USDC"
-        );
+        vault = new MirrorVault(IERC20(USDC), address(treasury), owner, "mirv ETH/USDC Vault", "mirvETH-USDC");
 
         // 5. Deploy Factory
         factory = new MirrorFactory(POOL_MANAGER, HYPERLANE_MAILBOX, PYTH, address(treasury), owner);
@@ -121,11 +97,8 @@ contract ForkBaseTest is Test {
         assertTrue(perms.afterRemoveLiquidity);
         assertFalse(perms.beforeSwap);
 
-        uint160 expectedFlags = uint160(
-            Hooks.AFTER_SWAP_FLAG
-            | Hooks.AFTER_ADD_LIQUIDITY_FLAG
-            | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
-        );
+        uint160 expectedFlags =
+            uint160(Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG);
         assertEq(uint160(address(hook)) & Hooks.ALL_HOOK_MASK, expectedFlags, "Hook address bits don't match perms");
     }
 
@@ -134,9 +107,9 @@ contract ForkBaseTest is Test {
     }
 
     function test_vaultMetadata() public view {
-        assertEq(vault.name(),   "mirv ETH/USDC Vault");
+        assertEq(vault.name(), "mirv ETH/USDC Vault");
         assertEq(vault.symbol(), "mirvETH-USDC");
-        assertEq(vault.asset(),  USDC);
+        assertEq(vault.asset(), USDC);
         assertEq(vault.PERFORMANCE_FEE_BPS(), 1500);
     }
 
@@ -217,8 +190,8 @@ contract ForkBaseTest is Test {
 
     function test_factoryStoresVerifiedAddresses() public view {
         assertEq(address(factory.poolManager()), POOL_MANAGER);
-        assertEq(factory.mailbox(),              HYPERLANE_MAILBOX);
-        assertEq(factory.pyth(),                 PYTH);
+        assertEq(factory.mailbox(), HYPERLANE_MAILBOX);
+        assertEq(factory.pyth(), PYTH);
     }
 
     // ─── Treasury fee forwarding ──────────────────────────────────────────────

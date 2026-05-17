@@ -7,7 +7,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract MirrorVaultTest is TestBase {
-
     // ─── Deposit / Withdraw ───────────────────────────────────────────────────
 
     function test_depositMintsShares() public {

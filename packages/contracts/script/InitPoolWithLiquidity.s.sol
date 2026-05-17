@@ -16,12 +16,12 @@ import {EnvHelpers} from "./lib/EnvHelpers.sol";
 // Lets the MonitorAgent read non-zero getPoolState() output.
 contract InitPoolWithLiquidityBase is Script {
     address constant POOL_MANAGER = 0x498581fF718922c3f8e6A244956aF099B2652b2b;
-    address constant USDC          = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
-    address constant WETH          = 0x4200000000000000000000000000000000000006;
+    address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+    address constant WETH = 0x4200000000000000000000000000000000000006;
 
     function run() external {
         uint256 deployerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
-        address hookAddr    = vm.envAddress("MIRROR_HOOK_BASE");
+        address hookAddr = vm.envAddress("MIRROR_HOOK_BASE");
 
         vm.startBroadcast(deployerKey);
 
@@ -30,11 +30,11 @@ contract InitPoolWithLiquidityBase is Script {
         console2.log("PoolModifyLiquidityTest:", address(lp));
 
         PoolKey memory key = PoolKey({
-            currency0:   Currency.wrap(WETH),
-            currency1:   Currency.wrap(USDC),
-            fee:         3000,
+            currency0: Currency.wrap(WETH),
+            currency1: Currency.wrap(USDC),
+            fee: 3000,
             tickSpacing: 60,
-            hooks:       IHooks(hookAddr)
+            hooks: IHooks(hookAddr)
         });
 
         // sqrtPriceX96 ≈ $3000/ETH (WETH=token0, USDC=token1)
@@ -55,12 +55,8 @@ contract InitPoolWithLiquidityBase is Script {
         //
         // L=1e12 is small enough that token0+token1 amounts fit comfortably
         // within the 100 WETH + 1M USDC the script funds.
-        ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower:      -200040,
-            tickUpper:      -192180,
-            liquidityDelta:  1e12,
-            salt:           bytes32(0)
-        });
+        ModifyLiquidityParams memory params =
+            ModifyLiquidityParams({tickLower: -200040, tickUpper: -192180, liquidityDelta: 1e12, salt: bytes32(0)});
         BalanceDelta delta = lp.modifyLiquidity(key, params, "");
         console2.log("LP add delta amount0:", int256(delta.amount0()));
         console2.log("LP add delta amount1:", int256(delta.amount1()));

@@ -10,7 +10,7 @@ contract TreasuryTest is Test {
     Treasury internal treasury;
     MockERC20 internal token;
     address internal owner = makeAddr("owner");
-    address internal safe  = makeAddr("safe");
+    address internal safe = makeAddr("safe");
     address internal alice = makeAddr("alice");
 
     function setUp() public {
@@ -44,7 +44,7 @@ contract TreasuryTest is Test {
 
         treasury.forwardToken(address(token));
 
-        assertEq(token.balanceOf(safe),             1000e6);
+        assertEq(token.balanceOf(safe), 1000e6);
         assertEq(token.balanceOf(address(treasury)), 0);
     }
 
@@ -65,7 +65,7 @@ contract TreasuryTest is Test {
         vm.prank(alice);
         treasury.receiveAndForward(address(token), 500e6);
 
-        assertEq(token.balanceOf(safe),  500e6);
+        assertEq(token.balanceOf(safe), 500e6);
         assertEq(token.balanceOf(alice), 0);
     }
 

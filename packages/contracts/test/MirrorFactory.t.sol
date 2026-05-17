@@ -10,13 +10,13 @@ import {MirrorFactory} from "../src/MirrorFactory.sol";
 contract MirrorFactoryTest is Test {
     MirrorFactory internal factory;
 
-    address internal owner       = makeAddr("owner");
-    address internal agent       = makeAddr("agent");
-    address internal alice       = makeAddr("alice");
+    address internal owner = makeAddr("owner");
+    address internal agent = makeAddr("agent");
+    address internal alice = makeAddr("alice");
     address internal poolManager = makeAddr("poolManager");
-    address internal mailbox     = makeAddr("mailbox");
-    address internal pyth        = makeAddr("pyth");
-    address internal treasury    = makeAddr("treasury");
+    address internal mailbox = makeAddr("mailbox");
+    address internal pyth = makeAddr("pyth");
+    address internal treasury = makeAddr("treasury");
 
     function setUp() public {
         factory = new MirrorFactory(poolManager, mailbox, pyth, treasury, owner);
@@ -26,10 +26,10 @@ contract MirrorFactoryTest is Test {
 
     function test_constructorStoresArgs() public view {
         assertEq(address(factory.poolManager()), poolManager);
-        assertEq(factory.mailbox(),              mailbox);
-        assertEq(factory.pyth(),                 pyth);
-        assertEq(factory.treasury(),             treasury);
-        assertEq(factory.owner(),                owner);
+        assertEq(factory.mailbox(), mailbox);
+        assertEq(factory.pyth(), pyth);
+        assertEq(factory.treasury(), treasury);
+        assertEq(factory.owner(), owner);
     }
 
     function test_constructorRevertsOnZeroAddresses() public {
@@ -54,11 +54,11 @@ contract MirrorFactoryTest is Test {
 
     function test_getPairReturnsEmptyForUnknown() public view {
         MirrorFactory.DeployedPair memory p = factory.getPair(keccak256("nonexistent"));
-        assertEq(p.hook,        address(0));
-        assertEq(p.vault,       address(0));
-        assertEq(p.token0,      address(0));
-        assertEq(p.token1,      address(0));
-        assertEq(p.deployedAt,  0);
+        assertEq(p.hook, address(0));
+        assertEq(p.vault, address(0));
+        assertEq(p.token0, address(0));
+        assertEq(p.token1, address(0));
+        assertEq(p.deployedAt, 0);
     }
 
     // ─── Agent authorization ──────────────────────────────────────────────────

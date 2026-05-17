@@ -39,7 +39,7 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     error ExceedsMaxMove();
 
     // ─── Events ─────────────────────────────────────────────────────────────
-    event PerformanceFeePaid(uint256 extraYield, uint256 feeShares, address treasury);
+    event PerformanceFeePaid(uint256 extraYield, uint256 feeShares, address indexed treasury);
     event CrossChainAssetsUpdated(uint256 newValue);
     event BaselineApyUpdated(uint256 newApyBps);
     event AgentAuthorizationUpdated(address indexed agent, bool authorized);
@@ -48,8 +48,8 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     event PrincipalSnapshotTaken(uint256 principal, uint256 timestamp);
 
     // ─── Constants ───────────────────────────────────────────────────────────
-    uint256 public constant PERFORMANCE_FEE_BPS = 1500;   // 15%
-    uint256 public constant MAX_BPS             = 10_000;
+    uint256 public constant PERFORMANCE_FEE_BPS = 1500; // 15%
+    uint256 public constant MAX_BPS = 10_000;
     uint256 public constant MIN_HARVEST_INTERVAL = 1 days;
 
     // OpenZeppelin ERC-4626 virtual offset prevents first-depositor inflation attack
@@ -88,13 +88,7 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     /// @param _owner     Owner (multisig)
     /// @param _name      Vault share token name (e.g. "Mirror ETH/USDC Vault")
     /// @param _symbol    Vault share token symbol (e.g. "mirvETH-USDC")
-    constructor(
-        IERC20 _asset,
-        address _treasury,
-        address _owner,
-        string memory _name,
-        string memory _symbol
-    )
+    constructor(IERC20 _asset, address _treasury, address _owner, string memory _name, string memory _symbol)
         ERC4626(_asset)
         ERC20(_name, _symbol)
         Ownable(_owner)
@@ -114,20 +108,22 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     }
 
     /// @dev Track principal on deposit
-    function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override whenNotPaused {
+    function _deposit(address caller, address receiver, uint256 assets, uint256 shares)
+        internal
+        override
+        whenNotPaused
+    {
         super._deposit(caller, receiver, assets, shares);
         principalTracked += assets;
         _accrueBaseline();
     }
 
     /// @dev Track principal on withdrawal
-    function _withdraw(
-        address caller,
-        address receiver,
-        address owner_,
-        uint256 assets,
-        uint256 shares
-    ) internal override whenNotPaused {
+    function _withdraw(address caller, address receiver, address owner_, uint256 assets, uint256 shares)
+        internal
+        override
+        whenNotPaused
+    {
         super._withdraw(caller, receiver, owner_, assets, shares);
         if (assets > principalTracked) {
             principalTracked = 0;
@@ -151,7 +147,7 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
         if (total <= principalTracked + baselineYieldAccrued) revert NoExtraYield();
 
         uint256 extraYield = total - principalTracked - baselineYieldAccrued;
-        uint256 feeAssets  = extraYield.mulDiv(PERFORMANCE_FEE_BPS, MAX_BPS, Math.Rounding.Floor);
+        uint256 feeAssets = extraYield.mulDiv(PERFORMANCE_FEE_BPS, MAX_BPS, Math.Rounding.Floor);
 
         if (feeAssets == 0) revert NoExtraYield();
 
@@ -200,11 +196,7 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
         if (elapsed == 0 || principalTracked == 0 || baselineApyBps == 0) return;
 
         // baseline yield = principal * APY * elapsed / 365 days
-        uint256 accrued = principalTracked.mulDiv(
-            baselineApyBps * elapsed,
-            MAX_BPS * 365 days,
-            Math.Rounding.Floor
-        );
+        uint256 accrued = principalTracked.mulDiv(baselineApyBps * elapsed, MAX_BPS * 365 days, Math.Rounding.Floor);
         baselineYieldAccrued += accrued;
         lastBaselineSnapshotAt = block.timestamp;
     }
@@ -223,6 +215,11 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
         emit AgentAuthorizationUpdated(agent, authorized);
     }
 
-    function pause()   external onlyOwner { _pause(); }
-    function unpause() external onlyOwner { _unpause(); }
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
 }

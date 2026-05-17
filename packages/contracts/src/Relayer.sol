@@ -42,12 +42,12 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
 
     // ─── Types ───────────────────────────────────────────────────────────────
     struct RebalanceMessage {
-        bytes32 pairId;         // keccak256(abi.encode(token0, token1))
-        int128  deltaToken0;    // positive = add, negative = remove
-        int128  deltaToken1;
-        uint24  newFee;
-        int24   tickLower;
-        int24   tickUpper;
+        bytes32 pairId; // keccak256(abi.encode(token0, token1))
+        int128 deltaToken0; // positive = add, negative = remove
+        int128 deltaToken1;
+        uint24 newFee;
+        int24 tickLower;
+        int24 tickUpper;
         uint256 minExpectedYield;
     }
 
@@ -60,7 +60,7 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
 
     /// @dev pairId => PoolKey registered on this chain
     mapping(bytes32 => PoolKey) private _poolKeys;
-    mapping(bytes32 => bool)    private _registered;
+    mapping(bytes32 => bool) private _registered;
 
     // ─── Constructor ─────────────────────────────────────────────────────────
     /// @param _poolManager V4 PoolManager on this chain
@@ -75,11 +75,13 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
     // ─── IMessageRecipient ───────────────────────────────────────────────────
 
     /// @notice Entry point for Hyperlane-delivered messages
-    function handle(
-        uint32 origin,
-        bytes32 sender,
-        bytes calldata message
-    ) external payable override whenNotPaused nonReentrant {
+    function handle(uint32 origin, bytes32 sender, bytes calldata message)
+        external
+        payable
+        override
+        whenNotPaused
+        nonReentrant
+    {
         if (msg.sender != mailbox) revert NotMailbox();
         if (!authorizedSenders[sender]) revert NotAuthorizedSender();
         if (message.length == 0) revert InvalidPayload();
@@ -100,10 +102,10 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
         PoolKey memory key = _poolKeys[rm.pairId];
 
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower:      rm.tickLower,
-            tickUpper:      rm.tickUpper,
+            tickLower: rm.tickLower,
+            tickUpper: rm.tickUpper,
             liquidityDelta: _liquidityFromDeltas(rm.deltaToken0, rm.deltaToken1, rm.tickLower, rm.tickUpper),
-            salt:           bytes32(0)
+            salt: bytes32(0)
         });
 
         // Approve tokens to PoolManager if adding liquidity
@@ -121,8 +123,7 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         if (msg.sender != address(poolManager)) revert NotMailbox();
 
-        (PoolKey memory key, ModifyLiquidityParams memory params) =
-            abi.decode(data, (PoolKey, ModifyLiquidityParams));
+        (PoolKey memory key, ModifyLiquidityParams memory params) = abi.decode(data, (PoolKey, ModifyLiquidityParams));
 
         (BalanceDelta delta,) = poolManager.modifyLiquidity(key, params, "");
         _settleDeltas(key, delta);
@@ -187,8 +188,13 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
         mailbox = newMailbox;
     }
 
-    function pause()   external onlyOwner { _pause(); }
-    function unpause() external onlyOwner { _unpause(); }
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
 
     /// @notice Rescue any tokens mistakenly sent here (no user funds are held here normally)
     function rescueToken(address token, uint256 amount) external onlyOwner {

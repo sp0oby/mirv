@@ -53,17 +53,21 @@
 - [x] `test/MirrorFactory.t.sol` — **8/8 passing** (constructor, auth, agent authorization)
 - [x] `test/Treasury.t.sol` — **12/12 passing** (forwarding, ETH receive, Safe rotation, fuzz)
 - [x] `test/Relayer.t.sol` — **16/16 passing** (Hyperlane message handling, sender auth, registerPool, pause)
-- [ ] `test/MirrorHook.t.sol` — needs uniswap-hooks `HookTest.sol` pattern (real V4 PoolManager + mined hook address). Deferred to fork-test suite — see TODO Phase 4.
-- [ ] `test/integration/MirrorFlow.t.sol` — full deposit → mirror → rebalance → harvest cycle (Anvil fork test)
-- [ ] `test/invariant/VaultInvariants.t.sol` — share price never decreases on deposit, totalAssets ≥ principal
+- [x] `test/integration/HookCallback.t.sol` — covers MirrorHook callbacks via real V4 fork (4 tests, supersedes the standalone HookTest.sol pattern)
+- [x] `test/integration/MirrorFlow.t.sol` — **1/1 passing** full lifecycle: pool init → 2-user deposit → real V4 swap → cross-chain yield report → harvest → partial redeem, all on Base fork
+- [x] `test/invariant/VaultInvariants.t.sol` — **4/4 passing** invariants via VaultHandler fuzzer: nonNegativeState, sharesBackedByAssets, totalAssetsContainsLocalBalance, treasurySharesMonotonic
 
 ### Static Analysis
-- [ ] Install Slither: `pip3 install slither-analyzer`
-- [ ] Run `slither . --filter-paths 'lib/'` and fix findings
-- [ ] Add Slither config (`.slither.config.json`) — whitelist `low-level-calls` for V4 hook callbacks
-- [ ] Run Mythril: `myth analyze src/MirrorHook.sol`
-- [ ] Run `aeon-vuln-scanner` (Bankr skill) — free Semgrep + TruffleHog + osv-scanner + Slither pre-audit pass
-- [ ] Run `forge fmt --check` and `forge inspect` storage layout
+- [x] Install Slither (`pip3 install --user slither-analyzer` → 0.11.5)
+- [x] Run `slither .` and triage findings:
+  - **Fixed:** CEI ordering in `MirrorHook._handleEvent` (lastDispatchTime set BEFORE external dispatch)
+  - **Fixed:** `PerformanceFeePaid` event now indexes `treasury` address
+  - Filtered (false positives or deps): `low-level-calls` (V4 hook callbacks need them), `naming-convention`, `timestamp` early-returns, `solc-version` (lib/), `assembly` (lib/), `too-many-digits` (lib/)
+- [x] Add Slither config (`.slither.config.json`) with filter_paths + exclude_optimization + detector exclusions for our patterns
+- [ ] Run Mythril — deferred to Phase 6 audit prep (slow, symbolic execution; less actionable than Slither for now)
+- [ ] Run `aeon-vuln-scanner` (Bankr skill) — needs Bankr account; defer to Phase 6
+- [x] `forge fmt --check` clean
+- [x] `forge inspect` storage layout captured to `packages/contracts/snapshots/` (Hook, Vault, Factory, Treasury, Relayer) — used for upgrade-safety diffs in Phase 6
 
 ### Security Checklist (from `memory/ref_security_checklist.md`)
 - [ ] All token decimal handling dynamic (`IERC20Metadata.decimals()`, no hardcoded `1e18`)

@@ -12,12 +12,12 @@ import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 contract RelayerTest is Test {
     Relayer internal relayer;
 
-    address internal owner       = makeAddr("owner");
-    address internal mailbox     = makeAddr("mailbox");
+    address internal owner = makeAddr("owner");
+    address internal mailbox = makeAddr("mailbox");
     address internal poolManager = makeAddr("poolManager");
-    address internal alice       = makeAddr("alice");
-    bytes32 internal sisterHook  = bytes32(uint256(uint160(makeAddr("sisterHook"))));
-    uint32  internal sisterDomain = 8453; // Base
+    address internal alice = makeAddr("alice");
+    bytes32 internal sisterHook = bytes32(uint256(uint160(makeAddr("sisterHook"))));
+    uint32 internal sisterDomain = 8453; // Base
 
     function setUp() public {
         relayer = new Relayer(poolManager, mailbox, owner);
@@ -27,8 +27,8 @@ contract RelayerTest is Test {
 
     function test_constructorStoresArgs() public view {
         assertEq(address(relayer.poolManager()), poolManager);
-        assertEq(relayer.mailbox(),              mailbox);
-        assertEq(relayer.owner(),                owner);
+        assertEq(relayer.mailbox(), mailbox);
+        assertEq(relayer.owner(), owner);
     }
 
     function test_constructorRevertsOnZeroPoolManager() public {
@@ -106,15 +106,17 @@ contract RelayerTest is Test {
         vm.prank(owner);
         relayer.setAuthorizedSender(sisterHook, true);
 
-        bytes memory payload = abi.encode(Relayer.RebalanceMessage({
-            pairId:           keccak256("unregistered"),
-            deltaToken0:      0,
-            deltaToken1:      0,
-            newFee:           3000,
-            tickLower:        -60,
-            tickUpper:        60,
-            minExpectedYield: 0
-        }));
+        bytes memory payload = abi.encode(
+            Relayer.RebalanceMessage({
+                pairId: keccak256("unregistered"),
+                deltaToken0: 0,
+                deltaToken1: 0,
+                newFee: 3000,
+                tickLower: -60,
+                tickUpper: 60,
+                minExpectedYield: 0
+            })
+        );
 
         vm.expectRevert(Relayer.PoolNotRegistered.selector);
         vm.prank(mailbox);
@@ -137,11 +139,11 @@ contract RelayerTest is Test {
 
     function test_registerPoolByOwner() public {
         PoolKey memory key = PoolKey({
-            currency0:   Currency.wrap(makeAddr("token0")),
-            currency1:   Currency.wrap(makeAddr("token1")),
-            fee:         3000,
+            currency0: Currency.wrap(makeAddr("token0")),
+            currency1: Currency.wrap(makeAddr("token1")),
+            fee: 3000,
             tickSpacing: 60,
-            hooks:       IHooks(makeAddr("hook"))
+            hooks: IHooks(makeAddr("hook"))
         });
         bytes32 pairId = keccak256("test-pair");
 
@@ -153,11 +155,11 @@ contract RelayerTest is Test {
 
     function test_registerPoolByNonOwnerReverts() public {
         PoolKey memory key = PoolKey({
-            currency0:   Currency.wrap(makeAddr("token0")),
-            currency1:   Currency.wrap(makeAddr("token1")),
-            fee:         3000,
+            currency0: Currency.wrap(makeAddr("token0")),
+            currency1: Currency.wrap(makeAddr("token1")),
+            fee: 3000,
             tickSpacing: 60,
-            hooks:       IHooks(makeAddr("hook"))
+            hooks: IHooks(makeAddr("hook"))
         });
         vm.expectRevert();
         vm.prank(alice);

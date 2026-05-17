@@ -51,32 +51,32 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
     // ─── Types ───────────────────────────────────────────────────────────────
     struct RebalanceMessage {
         bytes32 pairId;
-        int128  deltaToken0;
-        int128  deltaToken1;
-        uint24  newFee;
-        int24   tickLower;
-        int24   tickUpper;
+        int128 deltaToken0;
+        int128 deltaToken1;
+        uint24 newFee;
+        int24 tickLower;
+        int24 tickUpper;
         uint256 minExpectedYield;
     }
 
     struct SisterDomain {
-        uint32  domainId;
+        uint32 domainId;
         bytes32 recipientAddress; // Relayer address as bytes32
     }
 
     // ─── Constants ───────────────────────────────────────────────────────────
     uint256 public constant MAX_BPS = 10_000;
-    uint32  public constant CHAINLINK_STALENESS = 3600; // 1 hour max price age
-    uint256 public constant PYTH_STALENESS      = 60;   // 60s max Pyth price age
+    uint32 public constant CHAINLINK_STALENESS = 3600; // 1 hour max price age
+    uint256 public constant PYTH_STALENESS = 60; // 60s max Pyth price age
 
     // Hyperlane domain IDs
     uint32 public constant DOMAIN_ETHEREUM = 1;
-    uint32 public constant DOMAIN_BASE     = 8453;
-    uint32 public constant DOMAIN_BNB      = 56;
+    uint32 public constant DOMAIN_BASE = 8453;
+    uint32 public constant DOMAIN_BNB = 56;
 
     // ─── State ───────────────────────────────────────────────────────────────
-    IMailbox   public immutable mailbox;
-    IPyth      public immutable pyth;
+    IMailbox public immutable mailbox;
+    IPyth public immutable pyth;
     AggregatorV3Interface public immutable chainlinkFeed; // e.g. ETH/USD
 
     bytes32 public immutable pythPriceFeedId; // e.g. ETH/USD feed id on Pyth
@@ -126,10 +126,10 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
         if (_mailbox == address(0) || _pyth == address(0) || _chainlinkFeed == address(0)) {
             revert ZeroAddress();
         }
-        mailbox          = IMailbox(_mailbox);
-        pyth             = IPyth(_pyth);
-        chainlinkFeed    = AggregatorV3Interface(_chainlinkFeed);
-        pythPriceFeedId  = _pythFeedId;
+        mailbox = IMailbox(_mailbox);
+        pyth = IPyth(_pyth);
+        chainlinkFeed = AggregatorV3Interface(_chainlinkFeed);
+        pythPriceFeedId = _pythFeedId;
     }
 
     // ─── BaseHook — hook permissions ─────────────────────────────────────────
@@ -139,19 +139,19 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
     ///         Mine the address with script/MineHookAddress.s.sol.
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
-            beforeInitialize:              false,
-            afterInitialize:               false,
-            beforeAddLiquidity:            false,
-            afterAddLiquidity:             true,
-            beforeRemoveLiquidity:         false,
-            afterRemoveLiquidity:          true,
-            beforeSwap:                    false,
-            afterSwap:                     true,
-            beforeDonate:                  false,
-            afterDonate:                   false,
-            beforeSwapReturnDelta:         false,
-            afterSwapReturnDelta:          false,
-            afterAddLiquidityReturnDelta:  false,
+            beforeInitialize: false,
+            afterInitialize: false,
+            beforeAddLiquidity: false,
+            afterAddLiquidity: true,
+            beforeRemoveLiquidity: false,
+            afterRemoveLiquidity: true,
+            beforeSwap: false,
+            afterSwap: true,
+            beforeDonate: false,
+            afterDonate: false,
+            beforeSwapReturnDelta: false,
+            afterSwapReturnDelta: false,
+            afterAddLiquidityReturnDelta: false,
             afterRemoveLiquidityReturnDelta: false
         });
     }
@@ -160,13 +160,12 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
 
     /// @dev Fires after every swap. Detects large price impact and dispatches
     ///      a Hyperlane imbalance notification if the swap is significant.
-    function _afterSwap(
-        address,
-        PoolKey calldata key,
-        SwapParams calldata params,
-        BalanceDelta delta,
-        bytes calldata
-    ) internal override whenNotPaused returns (bytes4, int128) {
+    function _afterSwap(address, PoolKey calldata key, SwapParams calldata params, BalanceDelta delta, bytes calldata)
+        internal
+        override
+        whenNotPaused
+        returns (bytes4, int128)
+    {
         _handleEvent(key, delta.amount0(), delta.amount1(), params.zeroForOne);
         return (this.afterSwap.selector, 0);
     }
@@ -203,21 +202,21 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
     ///         cross-chain rebalance dispatch.
     function dispatchRebalance(
         bytes32 pairId,
-        int128  deltaToken0,
-        int128  deltaToken1,
-        uint24  newFee,
-        int24   tickLower,
-        int24   tickUpper
+        int128 deltaToken0,
+        int128 deltaToken1,
+        uint24 newFee,
+        int24 tickLower,
+        int24 tickUpper
     ) external payable nonReentrant whenNotPaused {
         if (!authorizedAgents[msg.sender]) revert NotAuthorizedAgent();
 
         RebalanceMessage memory rm = RebalanceMessage({
-            pairId:           pairId,
-            deltaToken0:      deltaToken0,
-            deltaToken1:      deltaToken1,
-            newFee:           newFee,
-            tickLower:        tickLower,
-            tickUpper:        tickUpper,
+            pairId: pairId,
+            deltaToken0: deltaToken0,
+            deltaToken1: deltaToken1,
+            newFee: newFee,
+            tickLower: tickLower,
+            tickUpper: tickUpper,
             minExpectedYield: 0
         });
 
@@ -226,11 +225,7 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
 
     /// @notice Agents report sister pool depths here so the hook can make
     ///         local imbalance decisions without oracle reads.
-    function reportSisterDepth(
-        uint32  domain,
-        bytes32 pairId,
-        uint256 depthUsd
-    ) external {
+    function reportSisterDepth(uint32 domain, bytes32 pairId, uint256 depthUsd) external {
         if (!authorizedAgents[msg.sender]) revert NotAuthorizedAgent();
         sisterDepths[domain][pairId] = depthUsd;
         emit SisterDepthReported(domain, pairId, depthUsd);
@@ -238,12 +233,7 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
 
     // ─── Internal ────────────────────────────────────────────────────────────
 
-    function _handleEvent(
-        PoolKey calldata key,
-        int128 amount0,
-        int128 amount1,
-        bool zeroForOne
-    ) internal {
+    function _handleEvent(PoolKey calldata key, int128 amount0, int128 amount1, bool zeroForOne) internal {
         PoolId pid = key.toId();
         bytes32 pairId = keccak256(abi.encode(key.currency0, key.currency1));
 
@@ -265,17 +255,19 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
         emit ImbalanceDetected(pairId, imbalanceThresholdBps, driftThresholdBps);
 
         RebalanceMessage memory rm = RebalanceMessage({
-            pairId:           pairId,
-            deltaToken0:      0,
-            deltaToken1:      0,
-            newFee:           key.fee,
-            tickLower:        0,
-            tickUpper:        0,
+            pairId: pairId,
+            deltaToken0: 0,
+            deltaToken1: 0,
+            newFee: key.fee,
+            tickLower: 0,
+            tickUpper: 0,
             minExpectedYield: 0
         });
 
-        _dispatchToAllSisters(rm);
+        // CEI: update state BEFORE the external dispatch call so a malicious mailbox
+        // cannot reenter and re-trigger dispatch within the same block.
         lastDispatchTime[pid] = block.timestamp;
+        _dispatchToAllSisters(rm);
     }
 
     function _dispatchToAllSisters(RebalanceMessage memory rm) internal {
@@ -286,11 +278,7 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
             SisterDomain memory sd = sisterDomains[i];
             uint256 fee = mailbox.quoteDispatch(sd.domainId, sd.recipientAddress, payload);
             if (address(this).balance < fee) continue;
-            bytes32 msgId = mailbox.dispatch{value: fee}(
-                sd.domainId,
-                sd.recipientAddress,
-                payload
-            );
+            bytes32 msgId = mailbox.dispatch{value: fee}(sd.domainId, sd.recipientAddress, payload);
             emit RebalanceDispatched(msgId, sd.domainId, rm.pairId);
         }
     }
@@ -302,9 +290,7 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
             uint256 sisterDepth = sisterDepths[sisterDomains[i].domainId][pairId];
             if (sisterDepth == 0) continue;
 
-            uint256 diff = localDepth > sisterDepth
-                ? localDepth - sisterDepth
-                : sisterDepth - localDepth;
+            uint256 diff = localDepth > sisterDepth ? localDepth - sisterDepth : sisterDepth - localDepth;
 
             uint256 avg = (localDepth + sisterDepth) / 2;
             if (diff * MAX_BPS / avg >= imbalanceThresholdBps) return true;
@@ -370,7 +356,7 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
     function setThresholds(uint256 newImbalanceBps, uint256 newDriftBps) external onlyOwner {
         if (newImbalanceBps > MAX_BPS || newDriftBps > MAX_BPS) revert InvalidThreshold();
         imbalanceThresholdBps = newImbalanceBps;
-        driftThresholdBps     = newDriftBps;
+        driftThresholdBps = newDriftBps;
         emit ThresholdUpdated(newImbalanceBps, newDriftBps);
     }
 
@@ -383,8 +369,13 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard {
         maxMoveBps = bps;
     }
 
-    function pause()   external onlyOwner { _pause(); }
-    function unpause() external onlyOwner { _unpause(); }
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
 
     function fund() external payable {}
 

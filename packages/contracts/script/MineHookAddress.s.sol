@@ -18,21 +18,14 @@ import {EnvHelpers} from "./lib/EnvHelpers.sol";
 ///
 /// Output: the salt to use in Deploy.s.sol
 contract MineHookAddress is Script {
-
-    function run(
-        address poolManager,
-        address mailbox,
-        address pyth,
-        address chainlinkFeed,
-        bytes32 pythFeedId
-    ) external view {
+    function run(address poolManager, address mailbox, address pyth, address chainlinkFeed, bytes32 pythFeedId)
+        external
+        view
+    {
         // The hook permissions we need encoded in the address lower bits
         // afterSwap=true, afterAddLiquidity=true, afterRemoveLiquidity=true
-        uint160 requiredFlags = uint160(
-            Hooks.AFTER_SWAP_FLAG |
-            Hooks.AFTER_ADD_LIQUIDITY_FLAG |
-            Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
-        );
+        uint160 requiredFlags =
+            uint160(Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG);
 
         // Owner is the deployer EOA (used in constructor args, must match Deploy.s.sol)
         address owner = vm.addr(EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY"));
@@ -49,11 +42,9 @@ contract MineHookAddress is Script {
             pyth,
             chainlinkFeed,
             pythFeedId,
-            owner   // owner of MirrorHook = deployer EOA
+            owner // owner of MirrorHook = deployer EOA
         );
-        bytes32 bytecodeHash = keccak256(
-            abi.encodePacked(type(MirrorHook).creationCode, constructorArgs)
-        );
+        bytes32 bytecodeHash = keccak256(abi.encodePacked(type(MirrorHook).creationCode, constructorArgs));
 
         uint256 found;
         for (uint256 i; i < 160_000; ++i) {
@@ -75,13 +66,11 @@ contract MineHookAddress is Script {
         }
     }
 
-    function _computeCreate2Address(
-        address deployer,
-        bytes32 salt,
-        bytes32 bytecodeHash
-    ) internal pure returns (address) {
-        return address(uint160(uint256(
-            keccak256(abi.encodePacked(bytes1(0xff), deployer, salt, bytecodeHash))
-        )));
+    function _computeCreate2Address(address deployer, bytes32 salt, bytes32 bytecodeHash)
+        internal
+        pure
+        returns (address)
+    {
+        return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), deployer, salt, bytecodeHash)))));
     }
 }

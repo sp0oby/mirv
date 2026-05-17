@@ -10,21 +10,21 @@ import {IMessageRecipient} from "../src/interfaces/IHyperlane.sol";
 contract MockHyperlaneMailboxTest is Test {
     MockHyperlaneMailbox internal baseMailbox;
     MockHyperlaneMailbox internal ethMailbox;
-    TestRecipient        internal recipient;
-    RevertingRecipient   internal badRecipient;
+    TestRecipient internal recipient;
+    RevertingRecipient internal badRecipient;
 
     address internal alice = makeAddr("alice");
 
     function setUp() public {
-        baseMailbox  = new MockHyperlaneMailbox(8453);
-        ethMailbox   = new MockHyperlaneMailbox(1);
-        recipient    = new TestRecipient();
+        baseMailbox = new MockHyperlaneMailbox(8453);
+        ethMailbox = new MockHyperlaneMailbox(1);
+        recipient = new TestRecipient();
         badRecipient = new RevertingRecipient();
     }
 
     function test_localDomain() public view {
         assertEq(baseMailbox.localDomain(), 8453);
-        assertEq(ethMailbox.localDomain(),  1);
+        assertEq(ethMailbox.localDomain(), 1);
     }
 
     function test_quoteDispatchAlwaysZero() public view {
@@ -47,14 +47,17 @@ contract MockHyperlaneMailboxTest is Test {
         bool found;
         bytes32 sig = keccak256("Dispatch(uint256,uint32,bytes32,bytes32,bytes)");
         for (uint256 i; i < logs.length; ++i) {
-            if (logs[i].topics[0] == sig) { found = true; break; }
+            if (logs[i].topics[0] == sig) {
+                found = true;
+                break;
+            }
         }
         assertTrue(found, "Dispatch event must fire");
     }
 
     function test_deliverCallsRecipientHandle() public {
         bytes32 senderB32 = bytes32(uint256(uint160(alice)));
-        bytes32 recB32    = bytes32(uint256(uint160(address(recipient))));
+        bytes32 recB32 = bytes32(uint256(uint160(address(recipient))));
         bytes memory body = abi.encode("hello base");
 
         vm.recordLogs();
@@ -70,14 +73,17 @@ contract MockHyperlaneMailboxTest is Test {
         bool found;
         bytes32 sig = keccak256("Delivered(uint32,bytes32,bytes32)");
         for (uint256 i; i < logs.length; ++i) {
-            if (logs[i].topics[0] == sig) { found = true; break; }
+            if (logs[i].topics[0] == sig) {
+                found = true;
+                break;
+            }
         }
         assertTrue(found, "Delivered event must fire");
     }
 
     function test_deliverCatchesRevertAndEmitsFailed() public {
         bytes32 senderB32 = bytes32(uint256(uint160(alice)));
-        bytes32 recB32    = bytes32(uint256(uint160(address(badRecipient))));
+        bytes32 recB32 = bytes32(uint256(uint160(address(badRecipient))));
 
         vm.recordLogs();
         ethMailbox.deliver(8453, senderB32, recB32, "");
@@ -87,7 +93,10 @@ contract MockHyperlaneMailboxTest is Test {
         bool foundFailed;
         bytes32 failSig = keccak256("DeliveryFailed(uint32,bytes32,bytes32,bytes)");
         for (uint256 i; i < logs.length; ++i) {
-            if (logs[i].topics[0] == failSig) { foundFailed = true; break; }
+            if (logs[i].topics[0] == failSig) {
+                foundFailed = true;
+                break;
+            }
         }
         assertTrue(foundFailed, "DeliveryFailed event must fire when handle() reverts");
     }
@@ -104,19 +113,20 @@ contract MockHyperlaneMailboxTest is Test {
 import {Vm} from "forge-std/Vm.sol";
 
 contract TestRecipient is IMessageRecipient {
-    uint32  public lastOrigin;
+    uint32 public lastOrigin;
     bytes32 public lastSender;
-    bytes   public lastMessage;
+    bytes public lastMessage;
 
     function handle(uint32 origin, bytes32 sender, bytes calldata message) external payable override {
-        lastOrigin  = origin;
-        lastSender  = sender;
+        lastOrigin = origin;
+        lastSender = sender;
         lastMessage = message;
     }
 }
 
 contract RevertingRecipient is IMessageRecipient {
     error AlwaysReverts();
+
     function handle(uint32, bytes32, bytes calldata) external payable override {
         revert AlwaysReverts();
     }

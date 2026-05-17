@@ -17,8 +17,8 @@ import {EnvHelpers} from "./lib/EnvHelpers.sol";
 //   forge script script/WireSisterDomains.s.sol:WireBnb     --rpc-url $ALCHEMY_BNB_URL     --broadcast
 
 uint32 constant DOMAIN_ETHEREUM = 1;
-uint32 constant DOMAIN_BASE     = 8453;
-uint32 constant DOMAIN_BNB      = 56;
+uint32 constant DOMAIN_BASE = 8453;
+uint32 constant DOMAIN_BNB = 56;
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
 contract WireBase is Script {
@@ -31,7 +31,7 @@ contract WireBase is Script {
 
         vm.startBroadcast(ownerKey);
         hook.addSisterDomain(DOMAIN_ETHEREUM, relayerEth);
-        hook.addSisterDomain(DOMAIN_BNB,      relayerBnb);
+        hook.addSisterDomain(DOMAIN_BNB, relayerBnb);
         vm.stopBroadcast();
 
         console2.log("Base hook sister domains wired:");
@@ -45,23 +45,23 @@ contract WireMainnet is Script {
     function run() external {
         uint256 ownerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
 
-        MirrorHook hook    = MirrorHook(payable(vm.envAddress("MIRROR_HOOK_MAINNET")));
-        Relayer    relayer = Relayer(payable(vm.envAddress("RELAYER_MAINNET")));
+        MirrorHook hook = MirrorHook(payable(vm.envAddress("MIRROR_HOOK_MAINNET")));
+        Relayer relayer = Relayer(payable(vm.envAddress("RELAYER_MAINNET")));
 
         bytes32 hookBase = bytes32(uint256(uint160(vm.envAddress("MIRROR_HOOK_BASE"))));
-        bytes32 hookBnb  = bytes32(uint256(uint160(vm.envAddress("MIRROR_HOOK_BNB"))));
+        bytes32 hookBnb = bytes32(uint256(uint160(vm.envAddress("MIRROR_HOOK_BNB"))));
         bytes32 relayerBase = bytes32(uint256(uint160(0))); // Base has no relayer (vault on Base)
-        bytes32 relayerBnb  = bytes32(uint256(uint160(vm.envAddress("RELAYER_BNB"))));
+        bytes32 relayerBnb = bytes32(uint256(uint160(vm.envAddress("RELAYER_BNB"))));
 
         vm.startBroadcast(ownerKey);
 
         // Hook on mainnet should know about Base + BNB sisters (so it can dispatch back)
         hook.addSisterDomain(DOMAIN_BASE, hookBase);
-        hook.addSisterDomain(DOMAIN_BNB,  hookBnb);
+        hook.addSisterDomain(DOMAIN_BNB, hookBnb);
 
         // Relayer on mainnet should accept messages FROM Base hook + BNB hook
         relayer.setAuthorizedSender(hookBase, true);
-        relayer.setAuthorizedSender(hookBnb,  true);
+        relayer.setAuthorizedSender(hookBnb, true);
 
         vm.stopBroadcast();
 
@@ -75,19 +75,19 @@ contract WireBnb is Script {
     function run() external {
         uint256 ownerKey = EnvHelpers.envPrivateKey("DEPLOYER_PRIVATE_KEY");
 
-        MirrorHook hook    = MirrorHook(payable(vm.envAddress("MIRROR_HOOK_BNB")));
-        Relayer    relayer = Relayer(payable(vm.envAddress("RELAYER_BNB")));
+        MirrorHook hook = MirrorHook(payable(vm.envAddress("MIRROR_HOOK_BNB")));
+        Relayer relayer = Relayer(payable(vm.envAddress("RELAYER_BNB")));
 
         bytes32 hookBase = bytes32(uint256(uint160(vm.envAddress("MIRROR_HOOK_BASE"))));
-        bytes32 hookEth  = bytes32(uint256(uint160(vm.envAddress("MIRROR_HOOK_MAINNET"))));
+        bytes32 hookEth = bytes32(uint256(uint160(vm.envAddress("MIRROR_HOOK_MAINNET"))));
 
         vm.startBroadcast(ownerKey);
 
-        hook.addSisterDomain(DOMAIN_BASE,     hookBase);
+        hook.addSisterDomain(DOMAIN_BASE, hookBase);
         hook.addSisterDomain(DOMAIN_ETHEREUM, hookEth);
 
         relayer.setAuthorizedSender(hookBase, true);
-        relayer.setAuthorizedSender(hookEth,  true);
+        relayer.setAuthorizedSender(hookEth, true);
 
         vm.stopBroadcast();
 
