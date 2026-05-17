@@ -424,9 +424,9 @@
 - [ ] Gnosis Safe set up on each of 3 chains (Treasury recipient)
 
 ### CI/CD
-- [ ] `.github/workflows/contracts.yml` — `forge fmt --check`, `forge build`, `forge test`, Slither
-- [ ] `.github/workflows/agents.yml` — `tsc --noEmit`, `yarn test`
-- [ ] `.github/workflows/frontend.yml` — `next build`, type-check
+- [x] `.github/workflows/contracts.yml` — `forge fmt --check`, `forge build --sizes`, `forge test`, storage layout snapshot, Slither (separate job)
+- [x] `.github/workflows/agents.yml` — `tsc --noEmit` on agent changes
+- [ ] `.github/workflows/frontend.yml` — `next build`, type-check (Phase 3 will add this)
 - [ ] Branch protection on `main` — require all CI green
 - [ ] Auto-deploy agents to Railway on `main` push (after manual approval)
 
