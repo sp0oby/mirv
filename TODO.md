@@ -92,8 +92,11 @@
 - [x] Pyth oracles all 3 chains (verified from docs.pyth.network)
 - [x] Chainlink ETH/USD all 3 chains (BNB: `0x9ef1B8c0E4F7dc8bF5719Ea496883DC6401d5b2e`)
 - [x] Hyperlane domain IDs confirmed (Ethereum=1, Base=8453, BNB=56)
-- [ ] BNB Chain USDC + USDT addresses (look up before BNB deploy)
-- [ ] Confirm Pyth ETH/USD feed ID matches across chains
+- [x] **BNB Chain USDC + USDT + ETH addresses** (added to `.env.example`):
+  - USDC-bep: `0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d` (**18 decimals**, not 6)
+  - USDT-bep: `0x55d398326f99059fF775485246999027B3197955` (**18 decimals**)
+  - ETH-bep:  `0x2170Ed0880ac9A755fd29B2688956BD959F933F8` (18 decimals)
+- [x] **Pyth ETH/USD feed ID matches across chains** — confirmed. Pyth IDs are cryptographic asset identifiers, NOT chain-specific. Same `0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace` works on Ethereum mainnet, Base, BNB, Arbitrum, etc. Verified by reading docs.pyth.network plus inspecting Pyth's price-feed-id repository.
 
 ---
 
