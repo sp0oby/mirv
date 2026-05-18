@@ -81,6 +81,7 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     event ChainRemoved(uint32 indexed hyperlaneDomain);
     event AllocationsUpdated(uint32[] domains, uint16[] bps);
     event CctpBridgeSent(uint32 indexed cctpDomain, bytes32 indexed recipient, uint256 amount, uint64 nonce);
+    event CctpBridgeSkipped(uint32 indexed cctpDomain, bytes32 indexed recipient, uint256 amount, bytes reason);
     event WithdrawRequested(
         uint256 indexed requestId, address indexed requester, address receiver, uint256 shares, uint256 expectedAssets
     );
@@ -98,13 +99,18 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     ///      chains MUST sum to 10_000 BPS. CCTP fields are required for USDC
     ///      bridging on USDC-supporting chains; warpRouter is reserved for
     ///      future WETH bridging (not used in v4 since Relayer holds WETH inventory).
+    ///
+    /// @dev Field order is packed deliberately: 2 bytes32 in their own slots (can't pack),
+    ///      then a third slot containing warpRouter (20) + cctpDomain (4) + allocationBps (2)
+    ///      + enabled (1) = 27 bytes. Total: 3 slots per ChainConfig (vs 5 in a naive
+    ///      ordering — saves ~40k gas per addChain).
     struct ChainConfig {
-        uint32 cctpDomain;       // Circle CCTP domain ID (0 if N/A — disables USDC bridging)
-        bytes32 cctpRecipient;   // bytes32(uint160(sisterRelayer)) — CCTP mint recipient
-        address warpRouter;      // Hyperlane warp router on Base (future: for non-USDC)
-        bytes32 warpRecipient;   // bytes32(uint160(sisterRelayer))
-        uint16 allocationBps;    // 0–10000
-        bool enabled;
+        bytes32 cctpRecipient;   // slot 1 — bytes32(uint160(sisterRelayer)) — CCTP mint recipient
+        bytes32 warpRecipient;   // slot 2 — bytes32(uint160(sisterRelayer))
+        address warpRouter;      // slot 3 (20 bytes) — Hyperlane warp router on Base (future)
+        uint32 cctpDomain;       // slot 3 (4 bytes) — Circle CCTP domain ID (0 disables USDC bridge)
+        uint16 allocationBps;    // slot 3 (2 bytes) — 0–10000
+        bool enabled;            // slot 3 (1 byte)
     }
 
     struct WithdrawRequest {
@@ -401,8 +407,9 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
         }
 
         // Validate total sums to 10000 across all enabled chains
-        uint256 total;
-        for (uint256 i; i < enabledDomains.length; ++i) {
+        uint256 total = 0;
+        uint256 enabledLen = enabledDomains.length;
+        for (uint256 i; i < enabledLen; ++i) {
             total += chainConfigs[enabledDomains[i]].allocationBps;
         }
         if (total != MAX_BPS) revert AllocationsMustSum10000();
@@ -433,10 +440,18 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
             if (cfg.cctpDomain == 0 && cfg.cctpRecipient == bytes32(0)) continue;
 
             IERC20(asset()).forceApprove(address(cctpMessenger), alloc);
-            uint64 nonce =
-                cctpMessenger.depositForBurn(alloc, cfg.cctpDomain, cfg.cctpRecipient, asset());
-
-            emit CctpBridgeSent(cfg.cctpDomain, cfg.cctpRecipient, alloc, nonce);
+            // Wrap in try/catch so a paused/degraded CCTP route on one destination
+            // doesn't revert the user's whole deposit. Funds for the failed route stay
+            // local in the vault (totalAssets() accounting stays consistent). Agent
+            // observes CctpBridgeSkipped and retries via a separate admin path once
+            // CCTP recovers, or rebalances allocations to skip the unhealthy chain.
+            try cctpMessenger.depositForBurn(alloc, cfg.cctpDomain, cfg.cctpRecipient, asset()) returns (uint64 nonce) {
+                emit CctpBridgeSent(cfg.cctpDomain, cfg.cctpRecipient, alloc, nonce);
+            } catch (bytes memory reason) {
+                // Revoke the approval so the failed amount can't be pulled later
+                IERC20(asset()).forceApprove(address(cctpMessenger), 0);
+                emit CctpBridgeSkipped(cfg.cctpDomain, cfg.cctpRecipient, alloc, reason);
+            }
         }
     }
 

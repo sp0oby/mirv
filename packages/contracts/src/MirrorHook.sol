@@ -52,6 +52,8 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
     event SisterDepthReported(uint32 indexed domain, bytes32 pairId, uint256 depthUsd);
     event SisterNotificationReceived(uint32 indexed origin, bytes32 indexed sender, bytes32 pairId, uint256 reportedDepth);
     event AuthorizedSenderUpdated(bytes32 indexed sender, bool authorized);
+    event DispatchCooldownUpdated(uint256 oldSeconds, uint256 newSeconds);
+    event DispatchFailed(uint32 indexed destinationDomain, bytes32 pairId, bytes reason);
 
     // ─── Types ───────────────────────────────────────────────────────────────
     /// @dev `currentDepth` carries the sender chain's `localDepthUsd` at dispatch time
@@ -349,11 +351,26 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
 
         for (uint256 i; i < len; ++i) {
             SisterDomain memory sd = sisterDomains[i];
-            uint256 fee = mailbox.quoteDispatch(sd.domainId, sd.recipientAddress, payload);
-            if (address(this).balance < fee) continue;
-            bytes32 msgId = mailbox.dispatch{value: fee}(sd.domainId, sd.recipientAddress, payload);
-            emit RebalanceDispatched(msgId, sd.domainId, rm.pairId);
+            // Bound each sister's dispatch in try/catch so one bad sister (paused mailbox,
+            // missing IGP route, etc) cannot revert the entire V4 LP-add tx. Without this,
+            // a single mis-wired sister DOSs every add/remove on every pool that shares
+            // this hook. We use external-self-call so try/catch works on the internal flow.
+            try this._dispatchOne(sd, payload, rm.pairId) {}
+            catch (bytes memory reason) {
+                emit DispatchFailed(sd.domainId, rm.pairId, reason);
+            }
         }
+    }
+
+    /// @dev External-callable wrapper so the loop above can try/catch it. Restricted
+    ///      to self-calls so it remains effectively internal. Doing this internally
+    ///      isn't supported by Solidity's try/catch (only external calls).
+    function _dispatchOne(SisterDomain calldata sd, bytes calldata payload, bytes32 pairId) external {
+        if (msg.sender != address(this)) revert NotAuthorizedAgent();
+        uint256 fee = mailbox.quoteDispatch(sd.domainId, sd.recipientAddress, payload);
+        if (address(this).balance < fee) revert InsufficientEthForDispatch();
+        bytes32 msgId = mailbox.dispatch{value: fee}(sd.domainId, sd.recipientAddress, payload);
+        emit RebalanceDispatched(msgId, sd.domainId, pairId);
     }
 
     function _imbalanceExceeded(bytes32 pairId, uint256 localDepth) internal view returns (bool) {
@@ -397,11 +414,37 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
         return (abs0 * price) / 1e18 + abs1 * 1e12;
     }
 
+    /// @dev Max acceptable confidence-to-price ratio for Pyth (1% = 100 BPS).
+    ///      If Pyth's confidence interval exceeds this, we treat the price as
+    ///      unreliable and fall back to Chainlink. Hardens against the agent
+    ///      reacting to noisy / wide-uncertainty price data.
+    uint256 public constant PYTH_MAX_CONF_BPS = 100;
+
     /// @dev Returns price in USD with 18 decimals.
-    ///      Tries Pyth first; falls back to Chainlink if Pyth is stale.
+    ///      Tries Pyth first; falls back to Chainlink if Pyth is stale OR if Pyth's
+    ///      confidence interval is > 1% of price (low-quality feed).
     function _getOraclePrice() internal view returns (uint256) {
         try pyth.getPriceNoOlderThan(pythPriceFeedId, PYTH_STALENESS) returns (IPyth.Price memory p) {
-            if (p.price > 0) {
+            // Validate price > 0 AND confidence/price ratio is within tolerance.
+            // p.conf is a uint64 absolute confidence interval in the same units as p.price.
+            if (p.price > 0 && p.conf > 0) {
+                uint256 priceAbs = uint256(uint64(p.price));
+                // conf * MAX_BPS / price <= PYTH_MAX_CONF_BPS  ⇨  conf * MAX_BPS <= price * PYTH_MAX_CONF_BPS
+                if (uint256(p.conf) * MAX_BPS > priceAbs * PYTH_MAX_CONF_BPS) {
+                    // Pyth too uncertain — skip and try Chainlink below.
+                } else {
+                    int256 scaledPrice = int256(priceAbs);
+                    uint256 priceUsd;
+                    if (p.expo >= 0) {
+                        priceUsd = uint256(scaledPrice) * 10 ** uint32(p.expo) * 1e18;
+                    } else {
+                        priceUsd = uint256(scaledPrice) * 1e18 / 10 ** uint32(-p.expo);
+                    }
+                    return priceUsd;
+                }
+            } else if (p.price > 0) {
+                // conf == 0 — Pyth gives a deterministic price (unusual but valid for
+                // some feeds). Accept it.
                 int256 scaledPrice = int256(uint256(uint64(p.price)));
                 uint256 priceUsd;
                 if (p.expo >= 0) {
@@ -468,6 +511,7 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
     }
 
     function setDispatchCooldown(uint256 seconds_) external onlyOwner {
+        emit DispatchCooldownUpdated(dispatchCooldown, seconds_);
         dispatchCooldown = seconds_;
     }
 

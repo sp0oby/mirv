@@ -73,12 +73,9 @@ contract TriggerV4DispatchBaseSepolia is Script {
         int24 tickLower = ((currentTick - 4200) / 60) * 60;
         int24 tickUpper = ((currentTick + 4200) / 60) * 60;
 
-        uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(currentTick);
-        try poolManager.initialize(key, sqrtPriceX96) {
-            console2.log("Pool initialized at tick", currentTick);
-        } catch {
-            console2.log("Pool already initialized");
-        }
+        // Pool is pre-initialized by the v4 deploy script. Skipping init() here
+        // — forge --broadcast extracts each external call as its own tx and
+        // doesn't honor try/catch around a known-reverting call.
 
         // Approve tokens to the LP router
         IERC20(usdc).approve(address(lpRouter), type(uint256).max);
