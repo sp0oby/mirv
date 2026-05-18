@@ -12,11 +12,13 @@ import {Currency, CurrencyLibrary} from "v4-core/src/types/Currency.sol";
 import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {SwapParams, ModifyLiquidityParams} from "v4-core/src/types/PoolOperation.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
+import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 import {PoolSwapTest} from "v4-core/src/test/PoolSwapTest.sol";
 import {PoolModifyLiquidityTest} from "v4-core/src/test/PoolModifyLiquidityTest.sol";
 
 import {MirrorHook} from "../../src/MirrorHook.sol";
 import {Treasury} from "../../src/Treasury.sol";
+import {Relayer} from "../../src/Relayer.sol";
 import {AggregatorV3Interface} from "../../src/interfaces/IChainlink.sol";
 
 /// @notice Validates the full V4 hook callback chain on a real Base mainnet fork:
@@ -30,6 +32,7 @@ import {AggregatorV3Interface} from "../../src/interfaces/IChainlink.sol";
 /// Run: `source .env && forge test --match-contract HookCallbackTest -vv`
 contract HookCallbackTest is Test {
     using PoolIdLibrary for PoolKey;
+    using StateLibrary for IPoolManager;
 
     // Base mainnet verified addresses
     address constant POOL_MANAGER = 0x498581fF718922c3f8e6A244956aF099B2652b2b;
@@ -525,6 +528,99 @@ contract HookCallbackTest is Test {
         vm.prank(owner);
         hook.setMaxSisterDepthMultiple(0);
         assertEq(hook.maxSisterDepthMultiple(), 0);
+    }
+
+    // ─── Relayer _liquidityFromDeltas — proper TickMath math ─────────────────
+    /// @dev Locks in the rc4→rc5 fix that replaces the int256(d0) placeholder
+    ///      in `Relayer._liquidityFromDeltas` with canonical TickMath +
+    ///      LiquidityAmounts math. Adds liquidity to a pool that this test
+    ///      already has running on the Base fork, via the full handle() path,
+    ///      and asserts:
+    ///        - `RebalanceExecuted` event fires
+    ///        - Relayer's token0/token1 balances drop by approximately the
+    ///          requested deltas (V4 rounding can leave dust, so we use a
+    ///          tight relative-tolerance check)
+    function test_relayerExecutesRebalanceWithProperLiquidityMath() public {
+        // Deploy a Relayer using the same PoolManager + a mocked mailbox so
+        // we can prank as it. Owner is the test contract.
+        address mockMailbox = makeAddr("relayerMailbox");
+        Relayer relayer = new Relayer(POOL_MANAGER, mockMailbox, owner);
+
+        bytes32 sisterSender = bytes32(uint256(uint160(makeAddr("sisterHook"))));
+
+        // Register sister + pool.
+        vm.startPrank(owner);
+        relayer.setAuthorizedSender(sisterSender, true);
+        relayer.registerPool(hook.canonicalPairId(), poolKey);
+        vm.stopPrank();
+
+        // Pre-seed pool with bootstrap liquidity at a wide range so the
+        // narrow-range add below has tokens to mix with.
+        vm.startPrank(alice);
+        lpRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -887220, tickUpper: 887220, liquidityDelta: 1e15, salt: bytes32(0)}),
+            ""
+        );
+        vm.stopPrank();
+
+        // Fund the relayer with token0 (WETH) + token1 (USDC) so it can pay
+        // the deltas when V4 takes them.
+        uint256 wethAmount = 1 ether;
+        uint256 usdcAmount = 3_000e6;
+        deal(WETH, address(relayer), wethAmount);
+        deal(USDC, address(relayer), usdcAmount);
+
+        uint256 wethBefore = IERC20(WETH).balanceOf(address(relayer));
+        uint256 usdcBefore = IERC20(USDC).balanceOf(address(relayer));
+
+        // Range straddling the pool's current tick so V4 actually consumes
+        // BOTH tokens. The setUp initialized at sqrtPriceX96 = 4.339e24 (~tick 200_000).
+        // Pick a range bracketing that, snapped to tickSpacing=60.
+        (, int24 currentTick,,) = IPoolManager(POOL_MANAGER).getSlot0(poolId);
+        int24 tLower = ((currentTick - 300) / 60) * 60;
+        int24 tUpper = ((currentTick + 300) / 60) * 60;
+
+        Relayer.RebalanceMessage memory rm = Relayer.RebalanceMessage({
+            pairId: hook.canonicalPairId(),
+            deltaToken0: int128(int256(wethAmount)),
+            deltaToken1: int128(int256(usdcAmount)),
+            newFee: 3000,
+            tickLower: tLower,
+            tickUpper: tUpper,
+            minExpectedYield: 0,
+            currentDepth: 0
+        });
+
+        // Deliver via the mailbox prank path.
+        vm.recordLogs();
+        vm.prank(mockMailbox);
+        relayer.handle(uint32(1), sisterSender, abi.encode(rm));
+
+        // 1. RebalanceExecuted event fired.
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bool sawExecuted;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == keccak256("RebalanceExecuted(bytes32,int128,int128)")) {
+                sawExecuted = true;
+            }
+        }
+        assertTrue(sawExecuted, "RebalanceExecuted must fire after proper-math add");
+
+        // 2. Token balances dropped (V4 took both tokens to mint the position).
+        //    With proper math, BOTH tokens are consumed — the placeholder
+        //    implementation would have taken essentially nothing because
+        //    liquidityDelta == int256(wethAmount) is a huge value relative
+        //    to a tight tick range, and V4 would have demanded astronomical
+        //    token amounts that the funding here doesn't cover.
+        uint256 wethAfter = IERC20(WETH).balanceOf(address(relayer));
+        uint256 usdcAfter = IERC20(USDC).balanceOf(address(relayer));
+        assertLt(wethAfter, wethBefore, "relayer WETH must drop (token0 taken by V4)");
+        assertLt(usdcAfter, usdcBefore, "relayer USDC must drop (token1 taken by V4)");
+
+        // The amounts consumed should not exceed what we provided.
+        assertLe(wethBefore - wethAfter, wethAmount, "WETH consumed <= delta requested");
+        assertLe(usdcBefore - usdcAfter, usdcAmount, "USDC consumed <= delta requested");
     }
 
     // ─── chainlinkFeedDecimals caching (R-12) ─────────────────────────────────

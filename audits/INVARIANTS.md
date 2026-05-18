@@ -1,6 +1,6 @@
 # mirv — Invariants
 
-**Tag:** `v1.0.0-rc4` (R-1, R-2, R-3, R-5, R-7, R-10, R-11, R-12, R-13 landed; see I-15..I-21 below).
+**Tag:** `v1.0.0-rc5` (R-1, R-2, R-3, R-5, R-7, R-10, R-11, R-12, R-13 landed + Relayer placeholder math closed; see I-15..I-22 below).
 
 Properties that must hold across every reachable post-transaction state. Each entry: the invariant statement, where it's enforced, why a violation matters, and how it's tested today.
 
@@ -317,6 +317,24 @@ The Foundry invariant suite (`test/invariant/VaultInvariants.t.sol`) covers the 
 
 ---
 
+## I-22. Relayer rebalance execution math (rc5)
+
+> For any successful `Relayer.handle(...)` that triggers `_executeRebalance`, the resulting `modifyLiquidity` call (a) computes `liquidityDelta` via `LiquidityAmounts.getLiquidityForAmounts(sqrtPriceX96, sqrtA, sqrtB, |d0|, |d1|)` (not the rc4 placeholder), and (b) settles the returned `BalanceDelta` using `sync + transfer + settle` for "caller owes" branches and `take` for "pool owes" branches.
+
+**Why:** The pre-rc5 implementation had two compounding bugs:
+1. `_liquidityFromDeltas` returned `int256(d0)` — sign-correct, magnitude wildly wrong (token units instead of liquidity units). A small rebalance would have failed to consume the expected tokens; a large rebalance would have demanded astronomical token amounts that the Relayer didn't have.
+2. `_settleDeltas` had the V4 sign convention inverted (commented "PoolManager owes us" on the negative branch when negative actually means caller-owes) AND used bare `currency.transfer` instead of the required `sync + transfer + settle` sequence for ERC-20s. Every real rebalance would have reverted `CurrencyNotSettled` on the PoolManager side.
+
+Both bugs were latent because no test prior to rc5 exercised the full `_executeRebalance` path — every Relayer test stopped at access-control checks. The rc5 fork test `test_relayerExecutesRebalanceWithProperLiquidityMath` is the first end-to-end coverage.
+
+**Enforced by:**
+- `Relayer._liquidityFromDeltas` (l. 158-180) — TickMath + LiquidityAmounts.
+- `Relayer._settleDeltas` (l. 138-152) — delegates to `CurrencySettler.settle / .take` (OZ uniswap-hooks helper, which handles native ETH + ERC-20 paths and the sync requirement).
+
+**Tested by:** `HookCallback.t.sol::test_relayerExecutesRebalanceWithProperLiquidityMath` — pre-seeds a wide-range LP, funds Relayer with WETH + USDC, calls `handle()` with realistic deltas + a tick range straddling the current price, asserts `RebalanceExecuted` event AND both tokens are consumed AND consumed amounts ≤ requested deltas.
+
+---
+
 ## Properties out of scope as on-chain invariants (operator-side)
 
 These hold by procedure, not code. Auditor should flag if any could be promoted to an on-chain check:
@@ -354,5 +372,6 @@ These hold by procedure, not code. Auditor should flag if any could be promoted 
 | I-19 Pause authorization (R-7) | ✅ | Vault — 4 unit; Hook — 2 fork tests |
 | I-20 Oracle deviation cross-check (R-11) | ✅ | Hook — 3 fork tests |
 | I-21 Sister-depth cap on inbound handle (R-13) | ✅ | Hook — 2 fork tests |
+| I-22 Relayer rebalance execution math (rc5) | ✅ | Relayer end-to-end via HookCallback fork test |
 
 Items marked **partial** or **inspection** are the highest-value places to add new invariant fuzz tests during audit prep.

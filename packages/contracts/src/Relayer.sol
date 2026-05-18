@@ -12,6 +12,10 @@ import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {Currency, CurrencyLibrary} from "v4-core/src/types/Currency.sol";
 import {ModifyLiquidityParams} from "v4-core/src/types/PoolOperation.sol";
+import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
+import {TickMath} from "v4-core/src/libraries/TickMath.sol";
+import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
+import {CurrencySettler} from "uniswap-hooks/src/utils/CurrencySettler.sol";
 import {IMessageRecipient} from "./interfaces/IHyperlane.sol";
 
 /// @title Relayer
@@ -24,6 +28,7 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
+    using StateLibrary for IPoolManager;
 
     // ─── Errors ─────────────────────────────────────────────────────────────
     error NotMailbox();
@@ -127,16 +132,13 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: rm.tickLower,
             tickUpper: rm.tickUpper,
-            liquidityDelta: _liquidityFromDeltas(rm.deltaToken0, rm.deltaToken1, rm.tickLower, rm.tickUpper),
+            liquidityDelta: _liquidityFromDeltas(key, rm.deltaToken0, rm.deltaToken1, rm.tickLower, rm.tickUpper),
             salt: bytes32(0)
         });
 
-        // Approve tokens to PoolManager if adding liquidity
-        if (params.liquidityDelta > 0) {
-            _approveIfNeeded(Currency.unwrap(key.currency0), address(poolManager), uint256(int256(rm.deltaToken0)));
-            _approveIfNeeded(Currency.unwrap(key.currency1), address(poolManager), uint256(int256(rm.deltaToken1)));
-        }
-
+        // No pre-approval needed: CurrencySettler.settle() inside the unlock
+        // callback uses `sync` + direct `transfer` from this contract, not the
+        // ERC-20 approval pattern.
         poolManager.unlock(abi.encode(key, params));
 
         emit RebalanceExecuted(rm.pairId, rm.deltaToken0, rm.deltaToken1);
@@ -154,39 +156,70 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
         return "";
     }
 
+    /// @dev V4 sign convention (confirmed against PoolModifyLiquidityTest reference):
+    ///        - negative delta  ⇨  caller owes the pool   ⇨  settle (transfer in)
+    ///        - positive delta  ⇨  pool   owes the caller ⇨  take    (transfer out)
+    ///      The pre-v5 implementation had this inverted (commented as
+    ///      "PoolManager owes us" on the negative branch) AND used a bare
+    ///      `currency.transfer` instead of the sync + transfer + settle
+    ///      sequence the PoolManager requires for ERC-20s. CurrencySettler
+    ///      (OZ's uniswap-hooks helper) handles both correctly, including the
+    ///      native-ETH path.
     function _settleDeltas(PoolKey memory key, BalanceDelta delta) internal {
         int128 d0 = delta.amount0();
         int128 d1 = delta.amount1();
 
         if (d0 < 0) {
-            // PoolManager owes us token0 — take it
-            poolManager.take(key.currency0, address(this), uint128(-d0));
+            CurrencySettler.settle(key.currency0, poolManager, address(this), uint128(-d0), false);
         } else if (d0 > 0) {
-            // We owe PoolManager token0 — sync balance and settle
-            key.currency0.transfer(address(poolManager), uint128(d0));
-            poolManager.settle();
+            CurrencySettler.take(key.currency0, poolManager, address(this), uint128(d0), false);
         }
 
         if (d1 < 0) {
-            poolManager.take(key.currency1, address(this), uint128(-d1));
+            CurrencySettler.settle(key.currency1, poolManager, address(this), uint128(-d1), false);
         } else if (d1 > 0) {
-            key.currency1.transfer(address(poolManager), uint128(d1));
-            poolManager.settle();
+            CurrencySettler.take(key.currency1, poolManager, address(this), uint128(d1), false);
         }
     }
 
-    function _approveIfNeeded(address token, address spender, uint256 amount) internal {
-        if (token == address(0)) return; // native ETH
-        uint256 current = IERC20(token).allowance(address(this), spender);
-        if (current < amount) {
-            IERC20(token).forceApprove(spender, amount);
-        }
-    }
+    /// @dev Convert agent-supplied (token0, token1) deltas into V4's liquidityDelta
+    ///      using the canonical TickMath + LiquidityAmounts math. Replaces the
+    ///      placeholder that returned `int256(d0)` (which had the right sign but
+    ///      wildly wrong magnitude — token units instead of liquidity units).
+    /// @param key         PoolKey for the pool being modified (needed to read sqrtPrice).
+    /// @param d0          Signed token0 delta (positive = add liquidity, negative = remove).
+    /// @param d1          Signed token1 delta. Must agree in sign with d0 for normal moves.
+    /// @param tickLower   Lower bound of the position's tick range.
+    /// @param tickUpper   Upper bound of the position's tick range.
+    /// @return liquidityDelta  Signed liquidity units to pass to `modifyLiquidity`.
+    ///
+    /// Math: liquidity = LiquidityAmounts.getLiquidityForAmounts(
+    ///         sqrtPriceX96, sqrtA, sqrtB, |d0|, |d1|
+    ///       ); sign carried from d0/d1 (whichever is non-zero).
+    function _liquidityFromDeltas(PoolKey memory key, int128 d0, int128 d1, int24 tickLower, int24 tickUpper)
+        internal
+        view
+        returns (int256)
+    {
+        // Sign: prefer d0's sign, fall back to d1 when d0 == 0 (single-sided add at edge of range).
+        bool isAdd = d0 > 0 || (d0 == 0 && d1 > 0);
 
-    /// @dev Simplified delta-to-liquidity conversion. Agents supply pre-computed values;
-    ///      this is a floor guard. Production upgrade: use TickMath + LiquidityAmounts.
-    function _liquidityFromDeltas(int128 d0, int128, int24, int24) internal pure returns (int256) {
-        return int256(d0);
+        // Take absolute values for the (positive-only) LiquidityAmounts API.
+        uint256 absD0 = uint256(int256(d0 < 0 ? -int256(d0) : int256(d0)));
+        uint256 absD1 = uint256(int256(d1 < 0 ? -int256(d1) : int256(d1)));
+
+        // Read current sqrtPrice from PoolManager state. StateLibrary handles
+        // the extsload + slot decoding so we don't depend on a separate StateView
+        // contract being deployed.
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
+
+        uint160 sqrtA = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 sqrtB = TickMath.getSqrtPriceAtTick(tickUpper);
+
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(sqrtPriceX96, sqrtA, sqrtB, absD0, absD1);
+
+        // V4 sign convention: positive = add, negative = remove. Cast uint128 → int256.
+        return isAdd ? int256(uint256(liquidity)) : -int256(uint256(liquidity));
     }
 
     // ─── Admin ───────────────────────────────────────────────────────────────

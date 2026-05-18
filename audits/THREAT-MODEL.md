@@ -1,6 +1,6 @@
 # mirv — Threat Model
 
-**Tag:** `v1.0.0-rc4` (R-1, R-2, R-3, R-5, R-7, R-10, R-11, R-12, R-13 landed; R-4, R-6, R-9 documented in `audits/OPERATIONS.md`; only R-8 remains open by deliberate choice).
+**Tag:** `v1.0.0-rc5` (R-1, R-2, R-3, R-5, R-7, R-10, R-11, R-12, R-13 landed; R-4, R-6, R-9 documented in `audits/OPERATIONS.md`; only R-8 remains open by deliberate choice. rc5 also fixes the Relayer's placeholder `_liquidityFromDeltas` and the inverted V4 sign convention in `_settleDeltas` — both were tracked as pre-mainnet blockers).
 
 This document enumerates the actors that can interact with the in-scope contracts (`audits/SCOPE.md`), their attack surfaces, and the mitigations in place. Severity uses the rubric in `SCOPE.md`.
 
@@ -268,6 +268,6 @@ The one interaction worth noting:
 | R-12 | Cache `chainlinkFeed.decimals()` in constructor            | **LANDED**  | New `chainlinkFeedDecimals` immutable set in `MirrorHook` constructor. Saves one external call per `_getOraclePrice()` invocation. Asserted equal to the live feed value on Base mainnet fork (`test_chainlinkFeedDecimalsCached`). |
 | R-13 | Cap sister-reported `currentDepth` value                   | **LANDED**  | `MirrorHook.handle` caps the stored sister depth at `maxSisterDepthMultiple × prior` (default 10×). Emits `SisterDepthCapped(origin, reported, capped)` when the cap fires so monitoring can correlate with sister compromise. Bootstrap case (prior==0) accepts as-is so first reports aren't blocked. |
 
-### Known open items (carried forward)
-- `Relayer._liquidityFromDeltas` is a placeholder; production should use TickMath + LiquidityAmounts (SCOPE.md note).
+### Known open items (carried forward / closed)
+- ~~`Relayer._liquidityFromDeltas` is a placeholder; production should use TickMath + LiquidityAmounts~~ — **CLOSED at rc5** (commit `<rc5>`). Replaced with canonical math; `_settleDeltas` also fixed (was inverted: treated "caller owes" as "pool owes" and used bare ERC-20 transfer instead of sync+settle). Both validated on a Base mainnet fork end-to-end via `test_relayerExecutesRebalanceWithProperLiquidityMath`.
 - `withdrawEth` on Base Sepolia v1-v4 — investigated 2026-05-18: v5 simulates cleanly on both chains (`cast estimate` succeeds; new fork-test `test_withdrawEth` locks in working behavior). The original observation was on the abandoned v1-v4 hooks and could not be reproduced. Phase 5.F line 408 resolved.
