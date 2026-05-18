@@ -522,28 +522,35 @@ Percentages are real completion counts from `TODO.md` checkboxes.
 - **Cross-chain:** MockHyperlaneMailbox delivers messages between Anvil forks; production swap to real Hyperlane mailboxes is a single env-var change.
 - **Vault lifecycle:** USDC deposit → cross-chain yield report → 15% performance fee harvest → fee shares minted to treasury. All math verified.
 
-## 16. Live Testnet Deployment (v4)
+## 16. Live Testnet Deployment (v5)
 
-Deployed 2026-05-17. All contracts verified on block explorers.
+Deployed 2026-05-17. All contracts verified on block explorers. v5 ships
+canonical pairId, chain registry with CCTP integration, async withdrawal
+queue, bidirectional `handle()`, plus the v5 hardening pass (DOS-resistant
+dispatch loops, Pyth confidence check, struct packing).
 
 **Canonical pair id (ETH-USDC-V1)**: `0x7a00c543412ae44415418950dc1ea26ae8977c50cbcec8035a5d99a911085b04`
 
 | Contract | Chain | Address |
 |---|---|---|
-| Treasury | Base Sepolia | [`0xb0bF2933B9D673736fB47DDE516803426111421a`](https://sepolia.basescan.org/address/0xb0bF2933B9D673736fB47DDE516803426111421a#code) |
-| MirrorHook | Base Sepolia | [`0x5FFB660142CA3034c508714d24797E80e7dc0540`](https://sepolia.basescan.org/address/0x5FFB660142CA3034c508714d24797E80e7dc0540#code) |
-| MirrorVault | Base Sepolia | [`0x4D168e17443454590ff97206789E458e457dFB81`](https://sepolia.basescan.org/address/0x4D168e17443454590ff97206789E458e457dFB81#code) |
-| MirrorFactory | Base Sepolia | [`0x2207e3A3117F219636F42b9209d021b73811485C`](https://sepolia.basescan.org/address/0x2207e3A3117F219636F42b9209d021b73811485C#code) |
-| MirrorHook | Ethereum Sepolia | [`0x9D42b4e0fC5eb64486C8171eEA9374a759990540`](https://sepolia.etherscan.io/address/0x9D42b4e0fC5eb64486C8171eEA9374a759990540#code) |
-| Relayer | Ethereum Sepolia | [`0x4B81e81B8aC495D399f636c013F5cfa414d6e10c`](https://sepolia.etherscan.io/address/0x4B81e81B8aC495D399f636c013F5cfa414d6e10c#code) |
+| Treasury | Base Sepolia | [`0x24FAb4871c5ed02Ad4c3dFdd5eB73126bd6bea2b`](https://sepolia.basescan.org/address/0x24FAb4871c5ed02Ad4c3dFdd5eB73126bd6bea2b#code) |
+| MirrorHook | Base Sepolia | [`0x6184B71D915404cB0d5848a2c10431a0DaccC540`](https://sepolia.basescan.org/address/0x6184B71D915404cB0d5848a2c10431a0DaccC540#code) |
+| MirrorVault | Base Sepolia | [`0x6C2288CB671f398c251DeB750c2D4c7680E97934`](https://sepolia.basescan.org/address/0x6C2288CB671f398c251DeB750c2D4c7680E97934#code) |
+| MirrorFactory | Base Sepolia | [`0x0C7a7cdD7e56f3Ec67cD4C2010cf73b9a0Ca74c2`](https://sepolia.basescan.org/address/0x0C7a7cdD7e56f3Ec67cD4C2010cf73b9a0Ca74c2#code) |
+| MirrorHook | Ethereum Sepolia | [`0x3F6F987021c6B08E2bC6c5E82765E31904fC8540`](https://sepolia.etherscan.io/address/0x3F6F987021c6B08E2bC6c5E82765E31904fC8540#code) |
+| Relayer | Ethereum Sepolia | [`0xC36062cf5aA913606b36A0913a899D13F4536B58`](https://sepolia.etherscan.io/address/0xC36062cf5aA913606b36A0913a899D13F4536B58#code) |
 
 Wiring state:
-- Vault chain registry: 2 enabled domains — Base (84532, alloc 60%), Ethereum (11155111, alloc 40%, CCTP domain 0)
+- Vault chain registry: 2 enabled domains — Base (84532, alloc 60%), Ethereum (11155111, alloc 40%, CCTP domain 0, recipient = ETH Relayer ✓ left-padded)
 - Hook canonical pair id matches across both chains ✓
-- Base hook → ETH Relayer (executable rebalance path) ✓
-- ETH hook → Base hook (inbound depth notification via `handle()`) ✓
+- Base hook → ETH Relayer (executable rebalance path) + authSenders[ETH hook] = true (inbound `handle()` path) ✓
+- ETH hook → Base hook (depth notification) + Relayer authSenders[Base hook] = true (executable receipt path) ✓
 - Both hooks funded with 0.01 ETH for Hyperlane dispatch fees ✓
 - V4 pools initialized on both chains at tick 199800 with mirv hooks attached ✓
+- ChainConfig packed 5→3 storage slots ✓
+
+Earlier iterations (v1–v4) are abandoned on testnet; their final balances stay
+stranded as part of the cost of iterating. See git log for the version history.
 
 ## 17. Design Documents
 
