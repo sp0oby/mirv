@@ -1,4 +1,6 @@
-import "dotenv/config";
+// MUST be the first import — loads env before any other module reads process.env
+// at its top level. See bootstrap.ts for the why.
+import "./bootstrap.js";
 
 // Force unbuffered stdout/stderr — critical for `nohup agent > log &` workflows
 // (otherwise Node block-buffers writes to a pipe/file and the log appears empty)

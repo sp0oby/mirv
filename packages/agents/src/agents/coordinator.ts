@@ -4,9 +4,9 @@ import {
   type Address,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { base } from "viem/chains";
 import { callClaude } from "../llm.js";
 import { COORDINATOR_PROMPT } from "../prompts/loader.js";
+import { chainFor } from "../chains.js";
 import type { MirrorState, CoordinatorDecision } from "../state.js";
 
 const mirrorHookAbi = parseAbi([
@@ -82,8 +82,12 @@ async function _executeOnChain(
     const hookAddress = process.env.MIRROR_HOOK_BASE as Address;
     if (!hookAddress) throw new Error("MIRROR_HOOK_BASE not set");
 
-    const publicClient = createPublicClient({ chain: base, transport: http(process.env.ALCHEMY_BASE_URL) });
-    const walletClient = createWalletClient({ account, chain: base, transport: http(process.env.ALCHEMY_BASE_URL) });
+    // chainFor() picks baseSepolia when NETWORK=sepolia so chainId matches RPC.
+    // Critical for walletClient — txs would sign with chainId 8453 but submit to
+    // 84532 and bounce as "invalid chain ID".
+    const baseChain    = chainFor("base");
+    const publicClient = createPublicClient({ chain: baseChain, transport: http(process.env.ALCHEMY_BASE_URL) });
+    const walletClient = createWalletClient({ account, chain: baseChain, transport: http(process.env.ALCHEMY_BASE_URL) });
 
     const pairId = encodeAbiParameters(
       parseAbiParameters("bytes32"),

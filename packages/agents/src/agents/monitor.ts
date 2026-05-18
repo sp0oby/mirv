@@ -2,31 +2,47 @@ import {
   createPublicClient, http, parseAbi, type Address,
   encodeAbiParameters, parseAbiParameters, keccak256,
 } from "viem";
-import { mainnet, base, bsc } from "viem/chains";
 import type Anthropic from "@anthropic-ai/sdk";
 import { callClaudeWithTools } from "../llm.js";
 import { MONITOR_PROMPT } from "../prompts/loader.js";
 import type { MirrorState, MonitorResult, Chain } from "../state.js";
+import { chainFor } from "../chains.js";
 
 // ─── Chain clients ────────────────────────────────────────────────────────────
+// chainFor() resolves the right viem chain object based on NETWORK env so
+// chainId matches the RPC. Critical for multicall3 routing + tx signing.
 const clients = {
-  ethereum: createPublicClient({ chain: mainnet, transport: http(process.env.ALCHEMY_MAINNET_URL) }),
-  base:     createPublicClient({ chain: base,    transport: http(process.env.ALCHEMY_BASE_URL) }),
-  bnb:      createPublicClient({ chain: bsc,     transport: http(process.env.ALCHEMY_BNB_URL) }),
+  ethereum: createPublicClient({ chain: chainFor("ethereum"), transport: http(process.env.ALCHEMY_MAINNET_URL) }),
+  base:     createPublicClient({ chain: chainFor("base"),     transport: http(process.env.ALCHEMY_BASE_URL) }),
+  bnb:      createPublicClient({ chain: chainFor("bnb"),      transport: http(process.env.ALCHEMY_BNB_URL) }),
 } as const;
 
-// V4 PoolManager (canonical per-chain addresses)
+// V4 PoolManager + StateView lens addresses, network-aware.
+// On NETWORK=sepolia we use the Sepolia equivalents; otherwise canonical mainnet.
+// Env overrides take precedence so per-deploy variations stay configurable.
+const NETWORK = process.env.NETWORK ?? "mainnet";
+const IS_SEPOLIA = NETWORK === "sepolia";
+
 const POOL_MANAGERS: Record<string, Address> = {
-  ethereum: "0x000000000004444c5dc75cB358380D2e3dE08A90",
-  base:     "0x498581fF718922c3f8e6A244956aF099B2652b2b",
-  bnb:      "0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF",
+  ethereum: (IS_SEPOLIA
+    ? (process.env.POOL_MANAGER_ETH_SEPOLIA ?? "0xE03A1074c86CFeDd5C142C4F04F1a1536e203543")
+    : (process.env.POOL_MANAGER_MAINNET    ?? "0x000000000004444c5dc75cB358380D2e3dE08A90")) as Address,
+  base:     (IS_SEPOLIA
+    ? (process.env.POOL_MANAGER_BASE_SEPOLIA ?? "0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408")
+    : (process.env.POOL_MANAGER_BASE         ?? "0x498581fF718922c3f8e6A244956aF099B2652b2b")) as Address,
+  bnb:      (process.env.POOL_MANAGER_BNB ?? "0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF") as Address,
 };
 
-// V4 StateView lens contracts — checksums verified via `cast to-check-sum-address`
+// V4 StateView lens — separate contract per chain, exposes typed getters over
+// PoolManager's extsload. Verified on-chain 2026-05-18 for Sepolia.
 const STATE_VIEWS: Record<string, Address> = {
-  ethereum: "0x7fFE42C4a5DEeA5b0feC41C94C136Cf115597227",
-  base:     "0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71",
-  bnb:      "0xd13Dd3D6E93f276FAfc9Db9E6BB47C1180aeE0c4",
+  ethereum: (IS_SEPOLIA
+    ? (process.env.STATE_VIEW_ETH_SEPOLIA ?? "0xe1dd9c3fa50edb962e442f60dfbc432e24537e4c")
+    : (process.env.STATE_VIEW_MAINNET    ?? "0x7fFE42C4a5DEeA5b0feC41C94C136Cf115597227")) as Address,
+  base:     (IS_SEPOLIA
+    ? (process.env.STATE_VIEW_BASE_SEPOLIA ?? "0x571291b572ed32ce6751a2cb2486ebee8defb9b4")
+    : (process.env.STATE_VIEW_BASE         ?? "0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71")) as Address,
+  bnb:      (process.env.STATE_VIEW_BNB ?? "0xd13Dd3D6E93f276FAfc9Db9E6BB47C1180aeE0c4") as Address,
 };
 
 const stateViewAbi = parseAbi([
@@ -126,9 +142,14 @@ const toolHandlers: Record<string, (input: any) => Promise<unknown>> = {
       // Read pool state + both token decimals + ETH/USD price in parallel.
       // Assume token1 is a stablecoin (USDC) at $1 — robust enough for ETH/USDC.
       // Future: read both prices from Chainlink for non-stable pairs.
+      // NETWORK switch: on Sepolia, use the testnet Chainlink feed (env keys
+      // _ETH_SEPOLIA / _BASE_SEPOLIA). Was hardcoded to mainnet feed addresses
+      // pre-fix and silently returned 0x on Sepolia → Promise.all rejected → tool failed.
       const chainlinkFeed = chain === "bnb"
         ? (process.env.CHAINLINK_ETH_USD_BNB ?? "")
-        : (process.env[`CHAINLINK_ETH_USD_${chain === "ethereum" ? "MAINNET" : "BASE"}`] ?? "");
+        : IS_SEPOLIA
+          ? (process.env[`CHAINLINK_ETH_USD_${chain === "ethereum" ? "ETH_SEPOLIA" : "BASE_SEPOLIA"}`] ?? "")
+          : (process.env[`CHAINLINK_ETH_USD_${chain === "ethereum" ? "MAINNET" : "BASE"}`] ?? "");
 
       const [slot0, liquidity, dec0, dec1, clRound, clDecimals] = await Promise.all([
         client.readContract({ address: stateView, abi: stateViewAbi, functionName: "getSlot0",     args: [poolId] }),
@@ -140,13 +161,26 @@ const toolHandlers: Record<string, (input: any) => Promise<unknown>> = {
       ]);
 
       const ethUsd = Number(clRound[1]) / 10 ** Number(clDecimals);
+
+      // Detect which token is the stablecoin via decimals heuristic.
+      // 6-decimal token → USDC-style stable. 18-decimal token → WETH-style.
+      // Works across Base mainnet (WETH=token0 6 < USDC=token1 12) AND testnets
+      // (USDC=token0 6 < WETH=token1 18 since 0x036C < 0x4200 on Base Sepolia,
+      //  0x1c7D < 0xfFf9 on ETH Sepolia). Without this branch the TVL math
+      //  reported $2 quadrillion on ETH Sepolia (priced the WETH amount as USDC).
+      const dec0n = Number(dec0);
+      const dec1n = Number(dec1);
+      const token0IsStable = dec0n === 6 && dec1n === 18;
+      const token0PriceUsd = token0IsStable ? 1     : ethUsd;
+      const token1PriceUsd = token0IsStable ? ethUsd : 1;
+
       const tvl = estimatePoolTvl({
         sqrtPriceX96:   slot0[0],
         liquidity:      liquidity,
-        token0Decimals: Number(dec0),
-        token1Decimals: Number(dec1),
-        token0PriceUsd: ethUsd,  // assumes token0 = WETH-like
-        token1PriceUsd: 1,       // assumes token1 = USDC-like
+        token0Decimals: dec0n,
+        token1Decimals: dec1n,
+        token0PriceUsd,
+        token1PriceUsd,
       });
 
       const result = {
@@ -156,8 +190,8 @@ const toolHandlers: Record<string, (input: any) => Promise<unknown>> = {
         tick:         slot0[1],
         fee:          slot0[3],
         liquidity:    liquidity.toString(),
-        token0:       { decimals: Number(dec0), priceUsd: ethUsd },
-        token1:       { decimals: Number(dec1), priceUsd: 1 },
+        token0:       { decimals: dec0n, priceUsd: token0PriceUsd },
+        token1:       { decimals: dec1n, priceUsd: token1PriceUsd },
         depthUsd:     Math.round(tvl.tvlUsd),
         amount0:      tvl.amount0,
         amount1:      tvl.amount1,
@@ -198,10 +232,23 @@ export async function runMonitorAgent(
   chain: Chain,
   _state: MirrorState
 ): Promise<Partial<MirrorState>> {
-  const hookAddress = process.env[`MIRROR_HOOK_${chain.toUpperCase()}`] ?? "0x0000000000000000000000000000000000000000";
+  // Env-key naming mismatch: our env uses MIRROR_HOOK_MAINNET / _BASE / _BNB
+  // (matching the Deploy.s.sol convention) but `chain` is "ethereum" not "mainnet".
+  // Without this translation, MIRROR_HOOK_ETHEREUM is unset → hookAddress=0x0 →
+  // poolId computes for a no-hook USDC/WETH pool that exists on Sepolia with random
+  // testnet liquidity (we saw L=1e18 from someone else's deposit, vs our L=2e9).
+  const HOOK_ENV_KEY: Record<Chain, string> = {
+    ethereum: "MIRROR_HOOK_MAINNET",
+    base:     "MIRROR_HOOK_BASE",
+    bnb:      "MIRROR_HOOK_BNB",
+  };
+  const hookAddress = process.env[HOOK_ENV_KEY[chain]] ?? "0x0000000000000000000000000000000000000000";
+  // Chainlink ETH/USD feed: testnet env keys differ from mainnet, branch on NETWORK.
   const chainlinkFeed = chain === "bnb"
     ? (process.env.CHAINLINK_ETH_USD_BNB ?? "")
-    : (process.env[`CHAINLINK_ETH_USD_${chain === "ethereum" ? "MAINNET" : "BASE"}`] ?? "");
+    : IS_SEPOLIA
+      ? (process.env[`CHAINLINK_ETH_USD_${chain === "ethereum" ? "ETH_SEPOLIA" : "BASE_SEPOLIA"}`] ?? "")
+      : (process.env[`CHAINLINK_ETH_USD_${chain === "ethereum" ? "MAINNET" : "BASE"}`] ?? "");
 
   // Chain-appropriate token addresses (currency0 must be < currency1 for V4).
   // All three chains use the canonical ETH + USDC pair for the mirv protocol.
@@ -213,13 +260,19 @@ export async function runMonitorAgent(
   };
   const SEPOLIA_TOKENS: Record<Chain, { token0: string; token1: string; }> = {
     ethereum: { token0: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", token1: "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14" }, // USDC < WETH on Sepolia
-    base:     { token0: "0x4200000000000000000000000000000000000006", token1: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" }, // WETH < USDC on Base Sepolia
+    // Bug fix 2026-05-18: USDC (0x036C…) < WETH (0x4200…) on Base Sepolia so USDC IS token0.
+    // The prior comment ("WETH < USDC on Base Sepolia") AND the field order were both wrong;
+    // it matched Base mainnet's ordering, not Sepolia's. The wrong order computed a poolId for
+    // a pool that doesn't exist on Sepolia → StateView reads returned 0x → agents thought
+    // depth was zero on Base Sepolia for the whole 3-cycle soak. Verified against on-chain
+    // poolId 0x689ccc80…7dcd.
+    base:     { token0: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", token1: "0x4200000000000000000000000000000000000006" }, // USDC < WETH on Base Sepolia
     bnb:      { token0: "0x0000000000000000000000000000000000000000", token1: "0x0000000000000000000000000000000000000000" }, // V4 not on BNB testnet
   };
   const tokens = process.env.NETWORK === "sepolia" ? SEPOLIA_TOKENS : MAINNET_TOKENS;
 
   const t = tokens[chain];
-  const prompt = `Monitor the ETH/USDC pool on ${chain}.
+  const prompt = `Monitor the ETH/USDC pool on ${chain}. You are responsible for ONE chain only: ${chain}.
 
 Pool parameters:
 - token0: ${t.token0}
@@ -228,16 +281,18 @@ Pool parameters:
 - tickSpacing: 60
 - hook:   ${hookAddress}
 
-CALL getPoolState({chain: "${chain}", token0: "${t.token0}", token1: "${t.token1}", feeTier: 3000, tickSpacing: 60, hookAddress: "${hookAddress}"})
-The tool returns depthUsd (already computed via V4 TVL math). Use this directly — DO NOT recompute.
+INSTRUCTIONS — exactly two tool calls, in this order:
+1. CALL getPoolState({chain: "${chain}", token0: "${t.token0}", token1: "${t.token1}", feeTier: 3000, tickSpacing: 60, hookAddress: "${hookAddress}"})
+2. (Optional) CALL getChainlinkPrice({chain: "${chain}", feedAddress: "${chainlinkFeed}"}) — only if you need to verify the ETH/USD price the pool TVL math used.
+
+DO NOT call getPoolState for any chain other than ${chain}. Sister-chain depths come from parallel monitor agents via the shared state, not from this agent. Calling getPoolState with a different chain wastes tokens and returns errors because token addresses differ across chains.
+
+Use the tool's returned depthUsd directly — DO NOT recompute the TVL math yourself.
 
 If depthUsd is non-zero, treat this chain as having real liquidity.
-If depthUsd is 0 (pool not initialized or no liquidity), report localDepthUsd: 0 and treat as needing attention if other chains have depth.
+If depthUsd is 0 (pool not initialized or no liquidity), report localDepthUsd: 0.
 
-Compare with previously reported sister depths (0 if unknown). Flag actionNeeded=true if any of:
-- imbalance > 3% (max sister depth differs from min by >3%)
-- price drift > 2%
-- This chain has depth but a sister has 0 (or vice versa)
+For imbalance assessment: report your own chain's depth honestly. Sister comparison happens upstream by the RebalanceAgent across all monitor outputs. Set actionNeeded=true ONLY if THIS chain's depth changed meaningfully vs the prior cycle (price/volume drift) OR if this chain reports 0 unexpectedly.
 
 Output ONLY a MonitorResult JSON, no other text.`;
 
@@ -258,6 +313,7 @@ Output ONLY a MonitorResult JSON, no other text.`;
     console.log(`  [monitor:${chain}] depth=$${parsed.localDepthUsd?.toFixed(0) ?? 'NaN'} imbalance=${parsed.imbalancePct?.toFixed(2) ?? 'NaN'}% action=${parsed.actionNeeded}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.log(`  [monitor:${chain}] CAUGHT — ${msg.slice(0, 200)}`);
     parsed = {
       chain,
       pair: "ETH/USDC",

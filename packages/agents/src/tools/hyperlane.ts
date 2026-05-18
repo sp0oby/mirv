@@ -8,20 +8,25 @@ import {
   parseAbiParameters,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { mainnet, base, bsc } from "viem/chains";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
+import { chainFor } from "../chains.js";
 
+// Hyperlane mailbox addresses come from env (set per testnet or mainnet) — the
+// testnet wrapper overrides HYPERLANE_MAILBOX_MAINNET/_BASE to Sepolia values
+// at runtime so this map resolves correctly.
 const MAILBOXES: Record<string, Address> = {
   ethereum: (process.env.HYPERLANE_MAILBOX_MAINNET ?? "0x0") as Address,
   base:     (process.env.HYPERLANE_MAILBOX_BASE    ?? "0x0") as Address,
   bnb:      (process.env.HYPERLANE_MAILBOX_BNB     ?? "0x0") as Address,
 };
 
+// chainFor() resolves the right viem chain object (baseSepolia/sepolia when
+// NETWORK=sepolia) so wallet signing uses the correct chainId.
 const CHAIN_CONFIGS = {
-  ethereum: { chain: mainnet, rpc: process.env.ALCHEMY_MAINNET_URL },
-  base:     { chain: base,    rpc: process.env.ALCHEMY_BASE_URL },
-  bnb:      { chain: bsc,     rpc: process.env.ALCHEMY_BNB_URL },
+  ethereum: { chain: chainFor("ethereum"), rpc: process.env.ALCHEMY_MAINNET_URL },
+  base:     { chain: chainFor("base"),     rpc: process.env.ALCHEMY_BASE_URL },
+  bnb:      { chain: chainFor("bnb"),      rpc: process.env.ALCHEMY_BNB_URL },
 } as const;
 
 const mailboxAbi = parseAbi([
