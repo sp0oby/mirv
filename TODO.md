@@ -1,9 +1,9 @@
 # mirv — Complete Build Checklist
 
 **Legend:** `[x]` done & tested · `[ ]` not started · `[~]` in progress · `[?]` blocked / needs decision
-**Updated:** 2026-05-18
+**Updated:** 2026-05-18 (post-soak-audit pass)
 
-**Current build status:** ✅ `forge build` green · ✅ `forge test` **85/85** passing (73 unit/invariant + 12 fork) · ✅ `tsc` zero errors · ✅ v5 testnet live on Base Sepolia + ETH Sepolia, all 6 contracts verified · ✅ CI green on `main` · ✅ Phase A (canonical pairId dispatch) + Phase D (CCTP deposit) validated end-to-end on v5
+**Current build status:** ✅ `forge build` green · ✅ `forge test` **85/85** passing (73 unit/invariant + 12 fork) · ✅ `tsc` zero errors · ✅ v5 testnet live on Base Sepolia + ETH Sepolia, all 6 contracts verified · ✅ CI green on `main` · ✅ Phase A (canonical pairId dispatch) + Phase D (CCTP deposit) validated end-to-end on v5 · 🟡 Phase 5.B agent soak: 6-bug audit + deterministic cast verification landed (commit `342a8aa`); confirming live-agent run deferred until system is free.
 
 **v5 testnet addresses** (deployed 2026-05-17, see README §16 for explorer links):
 - Base Sepolia: Treasury `0x24FAb487…ea2b` · Hook `0x6184B71D…0540` · Vault `0x6C2288CB…7934` · Factory `0x0C7a7cdD…74c2`
@@ -124,9 +124,10 @@
 
 ### State + Tools
 - [x] `state.ts` — TypeScript types + LangGraph `Annotation` state
-- [x] `tools/poolState.ts` — viem-based getPoolState / getChainlinkPrice / getTokenBalance
-- [x] `tools/hyperlane.ts` — estimateHyperlaneFee, encodeRebalancePayload, sendHyperlaneMessage
+- [x] ~~`tools/poolState.ts`~~ — removed 2026-05-18 (dead code, no importers). getPoolState + getChainlinkPrice live inline in `agents/monitor.ts` toolHandlers; the standalone file was a leftover from an early refactor.
+- [x] `tools/hyperlane.ts` — estimateHyperlaneFee, encodeRebalancePayload, sendHyperlaneMessage. Uses `chains.ts` for testnet/mainnet viem chain resolution.
 - [x] `tools/redis.ts` — saveToRedis / loadFromRedis / appendCycleHistory
+- [x] `bootstrap.ts` + `chains.ts` (added 2026-05-18) — env loader that runs before any static import reads `process.env`, and centralized viem chain object resolution for testnet/mainnet.
 - [ ] `tools/pyth.ts` — fetch Pyth update VAA from Hermes endpoint
 - [ ] `tools/onchain.ts` — `updateCrossChainAssets`, `updateBaselineApy`, `harvest` callers
 - [ ] `tools/baseline.ts` — calculate baseline single-chain APY from historical data
@@ -382,9 +383,22 @@ The mirv agents use a shared **Anthropic** API key + a single shared `AGENT_PRIV
 - [x] **Phase D (CCTP deposit)** validated on v5: 1 USDC deposit → 0.6 USDC local + 0.4 USDC burned via CCTP → Circle attestation → MessageTransmitter.receiveMessage on ETH Sepolia → 0.4 USDC native USDC minted to Relayer (tx `0xc184bcc4…13cf`)
 - [x] Vault accounting correct: deployer shares minted 1:1, vault local balance == 60% of deposit, deployer USDC balance decreased exactly by deposit amount
 - [x] `CctpBridgeSent` event fires with correct left-padded `mintRecipient` (the bytes32 padding bug from manual remediation cannot recur — script uses correct format)
-- [x] **B: Agent loop validated against v5 testnet** (2026-05-18, 3-cycle controlled soak, ~$0.10 Claude credits). 9 Claude Sonnet 4.6 invocations across the loop (2 monitors + 1 rebalance per cycle), multi-round tool calling worked, conditional routing skipped Risk/Coordinator on `action=none`, defensive semantics on anomalous data confirmed correct. Added `MAX_CYCLES` env cap to `index.ts` for controlled runs. **Gap surfaced**: agent's `tools/poolState.ts` calls V4 StateView lens at mainnet-hardcoded addresses → returns `0x` on Sepolia. Fix below.
-- [ ] **Source V4 StateView lens addresses for Base Sepolia + ETH Sepolia** and add to `.env.example`. Update `tools/poolState.ts` to branch on `NETWORK` env (same pattern as token-address swap). ~15 min fix. Then re-run the agent loop to confirm Claude sees real pool data.
-- [ ] **B follow-up: longer soak (1-2 hrs)** after the StateView fix lands — let Claude actually see live pool depth + decide on rebalances. Estimated ~$5-20 depending on cycle count and whether the agent triggers any `dispatchRebalance` calls.
+- [~] **B: Agent loop ran against v5 testnet** (2026-05-18, 3-cycle controlled soak, ~$0.10 Claude credits). 9 Claude Sonnet 4.6 invocations across the loop (2 monitors + 1 rebalance per cycle), multi-round tool calling worked, conditional routing skipped Risk/Coordinator on `action=none`. **However:** post-soak audit revealed the agent had been reading the *wrong pool* — see resolution log entry below. Added `MAX_CYCLES` env cap to `index.ts` for controlled runs.
+- [x] **Source V4 StateView lens addresses for Base Sepolia + ETH Sepolia** — done (commit `342a8aa`). Both StateView env keys (`STATE_VIEW_BASE_SEPOLIA`, `STATE_VIEW_ETH_SEPOLIA`) populated in `.env.example`; `STATE_VIEWS` map in `monitor.ts` branches on `IS_SEPOLIA`. Same pattern applied to `POOL_MANAGERS`.
+- [x] **6-bug monitor.ts audit pass + fixes landed** (2026-05-18, commit `342a8aa`):
+  1. Hardcoded mainnet PoolManager/StateView → testnet branch added.
+  2. Second mainnet-only Chainlink feed lookup nested in `getPoolState` → mirrors outer NETWORK branch.
+  3. Sister-chain `getPoolState` calls with wrong token addresses → system + user prompts rewritten to constrain monitor to its assigned chain.
+  4. TVL math priced WETH as USD when token0=USDC on Sepolia → decimals-aware stablecoin detection.
+  5. Base Sepolia token order was inverted (USDC < WETH on Sepolia, not WETH < USDC like mainnet Base) → fixed.
+  6. **HOOK_ENV_KEY mapping bug** — monitor.ts looked up `MIRROR_HOOK_ETHEREUM` but env keys are `_MAINNET`/`_BASE`/`_BNB`. The wrong key meant hookAddress fell back to `0x0`, so the agent computed the *no-hook* USDC/WETH poolId (with random testnet liquidity L≈1e18) instead of mirv's poolId (L=2e9). This is why the original "validated" soak silently read the wrong pool.
+  Additional infra fixes in same commit: `bootstrap.ts` so env loads before any static import reads `process.env`; `chains.ts` so viem signs with the right chainId; surfaced silent `catch` in `runMonitorAgent`.
+- [x] **Deterministic cast verification of the fix** (2026-05-18) — computed canonical poolId on both chains using env-driven hook addresses, called `StateView.getLiquidity(poolId)` directly:
+  - Base Sepolia: hook `0x6184…C540` → poolId `0x689c…7dcd` → **L = 2,000,000,000** ✓
+  - ETH Sepolia: hook `0x3F6F…8540` → poolId `0x89d9…755d` → **L = 2,000,000,000** ✓
+  This is enough to prove the agent (when it next runs) will compute the same poolId and read the actual mirv pool, not the no-hook ghost pool.
+- [ ] **B follow-up: live agent soak confirming L=2e9 reads** (~$0.05, `MAX_CYCLES=2`) — deferred because tsx cold start exceeded 4 min under current system load (avg 3-4, 5.5GB swap). Not blocked on code; run when system is free.
+- [ ] **B follow-up: longer soak (1-2 hrs)** once the short validation soak above passes — let Claude actually decide on rebalances over time. Estimated ~$5-20 depending on cycle count and whether the agent triggers any `dispatchRebalance` calls.
 - [ ] Verify Hyperlane testnet delivers messages → Base hook `handle()` updates sisterDepths and ETH Relayer's modifyLiquidity executes. Testnet relayer latency varies; not always actionable on our end.
 - [ ] Test `harvest()` after simulated yield report — verify treasury receives fee shares (works on Anvil; redo on testnet)
 - [ ] Test `pause()` from RiskAgent — verify hook stops dispatching
@@ -395,6 +409,7 @@ The mirv agents use a shared **Anthropic** API key + a single shared `AGENT_PRIV
 - [ ] Capture Hyperlane explorer screenshots showing the dispatched cross-chain messages for the grant pitch
 
 ### F. Phase 5 known gaps — resolution log
+- [x] **Agent silently read the wrong pool on Sepolia** (uncovered 2026-05-18, fixed commit `342a8aa`). The Phase 5.B "validated" soak was misleading: `HOOK_ENV_KEY` looked up `MIRROR_HOOK_ETHEREUM` while env keys are `_MAINNET`/`_BASE`/`_BNB`; the fallback `0x0` hook address produced a poolId for the no-hook USDC/WETH pool on each Sepolia (random testnet liquidity L≈1e18) instead of mirv's pool (L=2e9). Five additional bugs in the same audit (hardcoded mainnet StateView/PoolManager, nested mainnet-only Chainlink feed, sister-chain getPoolState calls, decimals-blind TVL math, inverted Base Sepolia token order) compounded the wrong result. All fixed; deterministic `cast` re-verification confirms the agent now resolves to the actual mirv poolId on both chains. Live re-run deferred only on system-load grounds.
 - [x] **Bug: `localDepthUsd` never written + unit-math mismatch in `_handleEvent`** — fixed in v2 (`_updateLocalDepth` + unified `_eventUsdValue` helper). Regression test `test_imbalanceFromLpEventFiresDispatch` covers the full pipeline.
 - [x] **ETH/BNB hooks dispatch into a void (architectural gap)** — fixed in v3 (`IMessageRecipient.handle()` on MirrorHook + `authorizedSenders` mapping + admin setter; `RebalanceMessage.currentDepth` field).
 - [x] **Cross-chain pair-identity mismatch** — fixed in v4 (canonical pairId via Factory; Hook immutable; defensive check in handle()).
