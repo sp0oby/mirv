@@ -56,17 +56,63 @@ contract RelayerTest is Test {
         relayer.setAuthorizedSender(sisterHook, true);
     }
 
-    function test_setMailboxByOwner() public {
+    // ─── Mailbox timelock (R-5) ───────────────────────────────────────────────
+
+    function test_proposeAndExecuteMailbox() public {
         address newMb = makeAddr("newMailbox");
+        address oldMb = relayer.mailbox();
+
         vm.prank(owner);
-        relayer.setMailbox(newMb);
+        relayer.proposeMailbox(newMb);
+        assertEq(relayer.pendingMailbox(), newMb);
+        assertEq(relayer.pendingMailboxEffectiveAt(), block.timestamp + relayer.MAILBOX_TIMELOCK_DELAY());
+        assertEq(relayer.mailbox(), oldMb);
+
+        vm.expectRevert(Relayer.TimelockNotReady.selector);
+        relayer.executeMailbox();
+
+        vm.warp(block.timestamp + relayer.MAILBOX_TIMELOCK_DELAY());
+        relayer.executeMailbox();
+
         assertEq(relayer.mailbox(), newMb);
+        assertEq(relayer.pendingMailbox(), address(0));
     }
 
-    function test_setMailboxZeroReverts() public {
+    function test_proposeMailboxZeroReverts() public {
         vm.expectRevert(Relayer.ZeroAddress.selector);
         vm.prank(owner);
-        relayer.setMailbox(address(0));
+        relayer.proposeMailbox(address(0));
+    }
+
+    function test_proposeMailboxOnlyOwner() public {
+        vm.expectRevert();
+        vm.prank(alice);
+        relayer.proposeMailbox(makeAddr("newMailbox"));
+    }
+
+    function test_executeMailboxRevertsIfNoPending() public {
+        vm.expectRevert(Relayer.NoPendingMailbox.selector);
+        relayer.executeMailbox();
+    }
+
+    function test_cancelPendingMailbox() public {
+        address newMb = makeAddr("newMailbox");
+        vm.prank(owner);
+        relayer.proposeMailbox(newMb);
+
+        vm.prank(owner);
+        relayer.cancelPendingMailbox();
+        assertEq(relayer.pendingMailbox(), address(0));
+
+        vm.warp(block.timestamp + relayer.MAILBOX_TIMELOCK_DELAY());
+        vm.expectRevert(Relayer.NoPendingMailbox.selector);
+        relayer.executeMailbox();
+    }
+
+    function test_cancelPendingMailboxRevertsIfNothingPending() public {
+        vm.expectRevert(Relayer.NoPendingMailbox.selector);
+        vm.prank(owner);
+        relayer.cancelPendingMailbox();
     }
 
     // ─── handle() reverts ─────────────────────────────────────────────────────

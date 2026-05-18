@@ -406,6 +406,46 @@ contract HookCallbackTest is Test {
         assertTrue(foundDispatch, "RebalanceDispatched must fire from afterAddLiquidity path");
     }
 
+    // ─── withdrawEth regression (Phase 5.F resolution log) ────────────────────
+    /// @dev Locks in the working behavior so a regression in the `.call{value:}`
+    ///      path is caught in CI. The original Phase 5 observation was on the
+    ///      abandoned v1-v4 Base Sepolia hooks and was never reproducible against
+    ///      the v5 code. This test asserts:
+    ///        - non-owner cannot withdraw (Ownable revert)
+    ///        - owner can withdraw a partial amount; balance decreases by exactly that
+    ///        - withdrawing more than the balance reverts (Solidity 0.8+ underflow on
+    ///          the value transfer)
+    function test_withdrawEth() public {
+        // Fund the hook so withdrawEth has something to move.
+        vm.deal(address(hook), 1 ether);
+
+        // On a real-mainnet fork the deterministic `owner` address from
+        // `makeAddr("owner")` happens to collide with a deployed contract that
+        // forwards inbound ETH onward — that swallows the value transfer and
+        // makes the test look like a regression when it isn't. Wipe any code
+        // so owner behaves like an EOA (per the production deploy assumption:
+        // owner is a Gnosis Safe at mainnet but is otherwise an EOA in test).
+        vm.etch(owner, hex"");
+
+        // 1. Non-owner cannot withdraw.
+        vm.prank(alice);
+        vm.expectRevert();
+        hook.withdrawEth(0.1 ether);
+
+        // 2. Owner can withdraw a partial amount; ETH lands at owner().
+        uint256 ownerBefore = owner.balance;
+        vm.prank(owner);
+        hook.withdrawEth(0.3 ether);
+        assertEq(address(hook).balance, 0.7 ether, "hook balance reduced by withdrawn amount");
+        assertEq(owner.balance, ownerBefore + 0.3 ether, "owner receives the withdrawn ETH");
+
+        // 3. Withdrawing more than the balance reverts (insufficient funds on the
+        //    low-level call → InsufficientEthForDispatch path).
+        vm.prank(owner);
+        vm.expectRevert(MirrorHook.InsufficientEthForDispatch.selector);
+        hook.withdrawEth(10 ether);
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
     function _equals(string memory a, string memory b) internal pure returns (bool) {

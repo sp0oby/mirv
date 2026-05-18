@@ -1,9 +1,9 @@
 # mirv — Audit Scope
 
-**Tag:** `v1.0.0-rc1` (commit `7f937e2`)
+**Tag:** `v1.0.0-rc2` (R-1 + R-5 hardening landed on top of rc1)
 **Pragma:** `solidity 0.8.26`
 **Compiler:** `solc 0.8.26`, `via_ir = true`, `optimizer_runs = 200`
-**Test state at tag:** `forge test` 85/85 (73 unit/invariant + 12 fork) · Slither 152 findings, P0/P1 closed · Mythril 34 SWC-101 all false-positive on 0.8+ (documented)
+**Test state at tag:** `forge test` **111/111** (90 unit/invariant + 21 fork) · Slither 19 in-scope findings under repo config, no new high/medium from rc1→rc2 · Mythril 34 SWC-101 all false-positive on 0.8+ (documented)
 
 ---
 

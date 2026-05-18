@@ -17,15 +17,32 @@ contract Treasury is Ownable, ReentrancyGuard {
     error ZeroAddress();
     error ZeroAmount();
     error EthTransferFailed();
+    error TimelockNotReady();
+    error NoPendingSafe();
 
     // ─── Events ─────────────────────────────────────────────────────────────
+    event SafeProposed(address indexed newSafe, uint256 effectiveAt);
+    event SafeCancelled(address indexed cancelled);
     event SafeUpdated(address indexed oldSafe, address indexed newSafe);
     event FeeForwarded(address indexed token, address indexed to, uint256 amount);
     event EthForwarded(address indexed to, uint256 amount);
 
+    // ─── Constants ───────────────────────────────────────────────────────────
+    /// @notice Minimum delay between proposing a new safe and executing the change.
+    ///         The safe is the destination for ALL forwarded fees; an instant
+    ///         flip by a compromised owner would redirect future revenue
+    ///         immediately. 24h gives off-chain monitoring time to escalate.
+    uint256 public constant SAFE_TIMELOCK_DELAY = 24 hours;
+
     // ─── State ───────────────────────────────────────────────────────────────
     /// @notice Gnosis Safe that receives all forwarded fees
     address public safe;
+
+    // ─── Safe timelock state (R-5) ───────────────────────────────────────────
+    /// @notice Address proposed as the next safe. Zero when no proposal is pending.
+    address public pendingSafe;
+    /// @notice Earliest timestamp at which `executeSafe` may consume the proposal.
+    uint256 public pendingSafeEffectiveAt;
 
     // ─── Constructor ─────────────────────────────────────────────────────────
     /// @param _safe     Gnosis Safe address
@@ -68,12 +85,35 @@ contract Treasury is Ownable, ReentrancyGuard {
 
     // ─── Admin ───────────────────────────────────────────────────────────────
 
-    /// @notice Update the destination Safe address
-    /// @param newSafe New Gnosis Safe address
-    function setSafe(address newSafe) external onlyOwner {
+    /// @notice Step 1 of the timelocked safe rotation (R-5). Records the intended
+    ///         new safe and the earliest activation timestamp. Overwriting an
+    ///         existing proposal resets the timer.
+    function proposeSafe(address newSafe) external onlyOwner {
         if (newSafe == address(0)) revert ZeroAddress();
-        emit SafeUpdated(safe, newSafe);
-        safe = newSafe;
+        pendingSafe = newSafe;
+        pendingSafeEffectiveAt = block.timestamp + SAFE_TIMELOCK_DELAY;
+        emit SafeProposed(newSafe, pendingSafeEffectiveAt);
+    }
+
+    /// @notice Step 2 of the timelocked safe rotation. Anyone may execute after
+    ///         the timer elapses.
+    function executeSafe() external {
+        address pending = pendingSafe;
+        if (pending == address(0)) revert NoPendingSafe();
+        if (block.timestamp < pendingSafeEffectiveAt) revert TimelockNotReady();
+        emit SafeUpdated(safe, pending);
+        safe = pending;
+        delete pendingSafe;
+        delete pendingSafeEffectiveAt;
+    }
+
+    /// @notice Cancel a pending safe rotation before it activates.
+    function cancelPendingSafe() external onlyOwner {
+        address cancelled = pendingSafe;
+        if (cancelled == address(0)) revert NoPendingSafe();
+        delete pendingSafe;
+        delete pendingSafeEffectiveAt;
+        emit SafeCancelled(cancelled);
     }
 
     receive() external payable {}

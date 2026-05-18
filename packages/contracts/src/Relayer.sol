@@ -32,13 +32,24 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
     error InvalidPayload();
     error InsufficientFunds();
     error PoolNotRegistered();
+    error TimelockNotReady();
+    error NoPendingMailbox();
 
     // ─── Events ─────────────────────────────────────────────────────────────
     event MessageReceived(uint32 indexed origin, bytes32 indexed sender, bytes32 messageId);
     event RebalanceExecuted(bytes32 indexed pairId, int128 deltaToken0, int128 deltaToken1);
     event PoolRegistered(bytes32 indexed pairId, PoolId poolId);
     event AuthorizedSenderUpdated(bytes32 indexed sender, bool authorized);
+    event MailboxProposed(address indexed newMailbox, uint256 effectiveAt);
+    event MailboxCancelled(address indexed cancelled);
     event MailboxUpdated(address indexed oldMailbox, address indexed newMailbox);
+
+    // ─── Constants ───────────────────────────────────────────────────────────
+    /// @notice Minimum delay between proposing a mailbox rotation and executing
+    ///         it. The mailbox is the only authority `handle()` accepts; flipping
+    ///         it instantly would let a compromised owner key spoof every future
+    ///         message. 24h gives a watching multisig time to `cancelPendingMailbox`.
+    uint256 public constant MAILBOX_TIMELOCK_DELAY = 24 hours;
 
     // ─── Types ───────────────────────────────────────────────────────────────
     /// @dev Must stay byte-for-byte identical with MirrorHook.RebalanceMessage.
@@ -63,6 +74,12 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
 
     /// @dev 32-byte sender addresses that are allowed to dispatch to this Relayer
     mapping(bytes32 => bool) public authorizedSenders;
+
+    // ─── Mailbox timelock state (R-5) ────────────────────────────────────────
+    /// @notice Address proposed as the next mailbox. Zero when no proposal is pending.
+    address public pendingMailbox;
+    /// @notice Earliest timestamp at which `executeMailbox` may consume the proposal.
+    uint256 public pendingMailboxEffectiveAt;
 
     /// @dev pairId => PoolKey registered on this chain
     mapping(bytes32 => PoolKey) private _poolKeys;
@@ -187,11 +204,35 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
         emit AuthorizedSenderUpdated(sender, authorized);
     }
 
-    /// @notice Update the Hyperlane Mailbox address
-    function setMailbox(address newMailbox) external onlyOwner {
+    /// @notice Step 1 of the timelocked mailbox rotation (R-5). Records the
+    ///         intended new mailbox and the earliest activation timestamp.
+    ///         Overwriting an existing proposal resets the timer.
+    function proposeMailbox(address newMailbox) external onlyOwner {
         if (newMailbox == address(0)) revert ZeroAddress();
-        emit MailboxUpdated(mailbox, newMailbox);
-        mailbox = newMailbox;
+        pendingMailbox = newMailbox;
+        pendingMailboxEffectiveAt = block.timestamp + MAILBOX_TIMELOCK_DELAY;
+        emit MailboxProposed(newMailbox, pendingMailboxEffectiveAt);
+    }
+
+    /// @notice Step 2 of the timelocked mailbox rotation. Anyone may execute
+    ///         after the timer elapses; same owner-friendly pattern as Vault.
+    function executeMailbox() external {
+        address pending = pendingMailbox;
+        if (pending == address(0)) revert NoPendingMailbox();
+        if (block.timestamp < pendingMailboxEffectiveAt) revert TimelockNotReady();
+        emit MailboxUpdated(mailbox, pending);
+        mailbox = pending;
+        delete pendingMailbox;
+        delete pendingMailboxEffectiveAt;
+    }
+
+    /// @notice Cancel a pending mailbox rotation before it activates.
+    function cancelPendingMailbox() external onlyOwner {
+        address cancelled = pendingMailbox;
+        if (cancelled == address(0)) revert NoPendingMailbox();
+        delete pendingMailbox;
+        delete pendingMailboxEffectiveAt;
+        emit MailboxCancelled(cancelled);
     }
 
     function pause() external onlyOwner {

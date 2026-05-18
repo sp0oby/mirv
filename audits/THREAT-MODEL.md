@@ -1,6 +1,6 @@
 # mirv — Threat Model
 
-**Tag:** `v1.0.0-rc1` (commit `7f937e2`)
+**Tag:** `v1.0.0-rc2` (R-1 + R-5 hardening landed; see status note below for R-1..R-13 disposition).
 
 This document enumerates the actors that can interact with the in-scope contracts (`audits/SCOPE.md`), their attack surfaces, and the mitigations in place. Severity uses the rubric in `SCOPE.md`.
 
@@ -250,25 +250,24 @@ The one interaction worth noting:
 
 ## Audit recommendations summary
 
-### High-priority
-- **R-1** Bound `updateCrossChainAssets` delta or require multisig agent quorum.
-- **R-5** Timelock on `setTreasury` / `setMailbox` / `setSafe`.
+### Status at rc2
 
-### Medium-priority
-- **R-2** Emit prior-value in `CrossChainAssetsUpdated` for monitoring.
-- **R-3** Gate `harvest` on freshness of `crossChainAssetsReported`.
-- **R-6** Document multisig signing policy.
-- **R-7** Separate guardian role for pause-only.
-- **R-8** Make `Relayer.mailbox` immutable.
-- **R-11** Cross-oracle sanity check (Pyth vs Chainlink deviation).
+| Rec  | Title                                                      | Status      | Notes                                                                                       |
+|------|------------------------------------------------------------|-------------|---------------------------------------------------------------------------------------------|
+| R-1  | Bound `updateCrossChainAssets` delta                       | **LANDED**  | `maxCrossChainAssetsDeltaBps` default 2500 (25%). Owner-tunable. First non-zero set bypasses the gate so deploy-time bootstrapping is unconstrained. |
+| R-2  | Emit prior-value in `CrossChainAssetsUpdated`              | **LANDED**  | Event signature now `(uint256 oldValue, uint256 newValue)`.                                |
+| R-3  | Gate `harvest` on freshness of `crossChainAssetsReported`  | open        | Pending: not implemented — would require a per-update timestamp + max-staleness param.    |
+| R-4  | Agent key rotation policy                                  | open / ops  | Runbook item, not on-chain.                                                                 |
+| R-5  | Timelock on `setTreasury` / `setMailbox` / `setSafe`       | **LANDED**  | `propose`/`execute`/`cancel` triplet on each. 24h delay. Anyone may execute after delay; only owner may propose / cancel. |
+| R-6  | Document multisig signing policy                           | open / ops  | Mainnet runbook item.                                                                       |
+| R-7  | Separate guardian role for pause-only                      | open        | Audit-decision; default Ownable kept for simplicity.                                       |
+| R-8  | Make `Relayer.mailbox` immutable                           | mitigated   | R-5 timelock closes the immediate-flip risk; immutability still cleaner but not blocking. |
+| R-9  | Document `setAuthorizedSender` admin sequence              | open / ops  |                                                                                             |
+| R-10 | `cctpRecipient != 0` check in `addChain`                   | open        | Two-line fix; left for audit-cycle consolidation.                                          |
+| R-11 | Cross-oracle sanity check (Pyth vs Chainlink deviation)    | open        | Audit-decision; current fallback semantics may be sufficient.                              |
+| R-12 | Cache `chainlinkFeed.decimals()` in constructor            | open        | Gas/info; not blocking.                                                                     |
+| R-13 | Cap sister-reported `currentDepth` value                   | open        | Audit-decision; current bound is on the consumer side (cooldown + threshold).               |
 
-### Low-priority / informational
-- **R-4** Agent key rotation policy.
-- **R-9** Document `setAuthorizedSender` admin sequence.
-- **R-10** `cctpRecipient != 0` check in `addChain`.
-- **R-12** Cache `chainlinkFeed.decimals()` in constructor.
-- **R-13** Cap sister-reported `currentDepth` value.
-
-### Known open items (must address pre-mainnet, not new findings)
-- `withdrawEth` reverts on Base Sepolia under unclear conditions — must be characterized (Phase 5.F line 408, also Invariant I-10 footnote).
-- `Relayer._liquidityFromDeltas` is a placeholder; production should use TickMath + LiquidityAmounts (SCOPE.md note, also flagged here).
+### Known open items (carried forward)
+- `Relayer._liquidityFromDeltas` is a placeholder; production should use TickMath + LiquidityAmounts (SCOPE.md note).
+- `withdrawEth` on Base Sepolia v1-v4 — investigated 2026-05-18: v5 simulates cleanly on both chains (`cast estimate` succeeds; new fork-test `test_withdrawEth` locks in working behavior). The original observation was on the abandoned v1-v4 hooks and could not be reproduced. Phase 5.F line 408 resolved.

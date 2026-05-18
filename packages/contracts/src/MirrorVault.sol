@@ -68,12 +68,20 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     error TooEarlyToCancel();
     error NotRequester();
     error InvalidArrayLengths();
+    error CrossChainAssetsDeltaTooLarge();
+    error TimelockNotReady();
+    error NoPendingTreasury();
 
     // ─── Events ─────────────────────────────────────────────────────────────
     event PerformanceFeePaid(uint256 extraYield, uint256 feeShares, address indexed treasury);
-    event CrossChainAssetsUpdated(uint256 newValue);
+    /// @dev Carries both `oldValue` and `newValue` so off-chain monitors (Tenderly,
+    ///      Dune) can alert on suspiciously large deltas without re-reading prior state.
+    event CrossChainAssetsUpdated(uint256 oldValue, uint256 newValue);
+    event MaxCrossChainAssetsDeltaUpdated(uint256 oldBps, uint256 newBps);
     event BaselineApyUpdated(uint256 newApyBps);
     event AgentAuthorizationUpdated(address indexed agent, bool authorized);
+    event TreasuryProposed(address indexed newTreasury, uint256 effectiveAt);
+    event TreasuryCancelled(address indexed cancelled);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event RebalanceExecuted(address indexed agent, uint256 amount0, uint256 amount1);
     event PrincipalSnapshotTaken(uint256 principal, uint256 timestamp);
@@ -93,6 +101,12 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     uint256 public constant MAX_BPS = 10_000;
     uint256 public constant MIN_HARVEST_INTERVAL = 1 days;
     uint256 public constant WITHDRAW_CANCEL_DELAY = 24 hours;
+    /// @dev Minimum delay between proposing a treasury change and executing it.
+    ///      The treasury is the only address that receives performance-fee shares,
+    ///      so a compromised owner key that flips it should be blocked long enough
+    ///      for the watching multisig (or off-chain monitor) to call
+    ///      `cancelPendingTreasury` and pause.
+    uint256 public constant TREASURY_TIMELOCK_DELAY = 24 hours;
 
     // ─── Types ───────────────────────────────────────────────────────────────
     /// @dev Per-chain bridge configuration. Allocations across all enabled
@@ -137,6 +151,21 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     ///         in-flight CCTP bridge legs (asset decimals — for USDC vault: 1e6).
     ///         Updated by CoordinatorAgent each cycle via updateCrossChainAssets.
     uint256 public crossChainAssetsReported;
+
+    /// @notice Maximum allowed delta (basis points of prior value) for a single
+    ///         `updateCrossChainAssets` call after the first non-zero report.
+    ///         Defaults to 25% — generous for daily yield reporting but tight
+    ///         enough that a compromised agent EOA can't inflate `totalAssets`
+    ///         arbitrarily in one tx (audit recommendation R-1).
+    ///         Owner can adjust; the first non-zero set (when prior == 0) bypasses
+    ///         this gate so legitimate bootstrapping is unconstrained.
+    uint256 public maxCrossChainAssetsDeltaBps = 2500;
+
+    // ─── Treasury timelock state (R-5) ───────────────────────────────────────
+    /// @notice Address proposed as the next treasury. Zero when no proposal is pending.
+    address public pendingTreasury;
+    /// @notice Earliest timestamp at which `executeTreasury` may consume the proposal.
+    uint256 public pendingTreasuryEffectiveAt;
 
     /// @notice Baseline single-chain APY in BPS (e.g. 800 = 8%).
     uint256 public baselineApyBps;
@@ -251,10 +280,26 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
 
     // ─── Agent-callable ──────────────────────────────────────────────────────
 
+    /// @notice Agent reports the current USD-equivalent of LP positions held
+    ///         cross-chain (plus in-flight CCTP legs). Bounded to a max % delta
+    ///         vs the prior report so a compromised agent cannot inflate
+    ///         `totalAssets` arbitrarily in a single call (R-1). The first
+    ///         non-zero report bypasses the gate so initial bootstrapping after
+    ///         deploy is unconstrained.
+    /// @dev    `oldValue` is emitted alongside `newValue` so off-chain monitors
+    ///         can compute % deltas without a separate prior read.
     function updateCrossChainAssets(uint256 newValue) external {
         if (!authorizedAgents[msg.sender]) revert NotAuthorizedAgent();
+        uint256 prev = crossChainAssetsReported;
+        if (prev != 0) {
+            uint256 diff = newValue > prev ? newValue - prev : prev - newValue;
+            // diff/prev > maxDeltaBps/MAX_BPS  ⇨  diff*MAX_BPS > prev*maxDeltaBps
+            if (diff * MAX_BPS > prev * maxCrossChainAssetsDeltaBps) {
+                revert CrossChainAssetsDeltaTooLarge();
+            }
+        }
         crossChainAssetsReported = newValue;
-        emit CrossChainAssetsUpdated(newValue);
+        emit CrossChainAssetsUpdated(prev, newValue);
     }
 
     function updateBaselineApy(uint256 newApyBps) external {
@@ -490,10 +535,50 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
 
     // ─── Admin ───────────────────────────────────────────────────────────────
 
-    function setTreasury(address newTreasury) external onlyOwner {
+    /// @notice Owner-only setter cap on `updateCrossChainAssets` per-call delta (R-1).
+    ///         Set to MAX_BPS (10_000) to disable the gate entirely (e.g. during
+    ///         a known migration). The agent EOA cannot touch this.
+    function setMaxCrossChainAssetsDeltaBps(uint256 newBps) external onlyOwner {
+        if (newBps > MAX_BPS) revert ZeroAmount();
+        emit MaxCrossChainAssetsDeltaUpdated(maxCrossChainAssetsDeltaBps, newBps);
+        maxCrossChainAssetsDeltaBps = newBps;
+    }
+
+    /// @notice Step 1 of the timelocked treasury rotation (R-5). Records the
+    ///         intended new treasury and the earliest timestamp at which it
+    ///         can be activated. Overwriting an existing pending proposal
+    ///         resets the timer — caller can also `cancelPendingTreasury`.
+    function proposeTreasury(address newTreasury) external onlyOwner {
         if (newTreasury == address(0)) revert ZeroAddress();
-        emit TreasuryUpdated(treasury, newTreasury);
-        treasury = newTreasury;
+        pendingTreasury = newTreasury;
+        pendingTreasuryEffectiveAt = block.timestamp + TREASURY_TIMELOCK_DELAY;
+        emit TreasuryProposed(newTreasury, pendingTreasuryEffectiveAt);
+    }
+
+    /// @notice Step 2 of the timelocked treasury rotation. Must wait
+    ///         `TREASURY_TIMELOCK_DELAY` after the proposal. Anyone may
+    ///         execute once the timer elapses (owner-friendly default but
+    ///         no privileged gate — saves a multisig tx after the proposal
+    ///         multisig has already approved the change once).
+    function executeTreasury() external {
+        address pending = pendingTreasury;
+        if (pending == address(0)) revert NoPendingTreasury();
+        if (block.timestamp < pendingTreasuryEffectiveAt) revert TimelockNotReady();
+        emit TreasuryUpdated(treasury, pending);
+        treasury = pending;
+        delete pendingTreasury;
+        delete pendingTreasuryEffectiveAt;
+    }
+
+    /// @notice Cancel a pending treasury rotation before it activates. Owner-only.
+    ///         Used by the watching multisig if a compromised owner key initiates
+    ///         a malicious proposal.
+    function cancelPendingTreasury() external onlyOwner {
+        address cancelled = pendingTreasury;
+        if (cancelled == address(0)) revert NoPendingTreasury();
+        delete pendingTreasury;
+        delete pendingTreasuryEffectiveAt;
+        emit TreasuryCancelled(cancelled);
     }
 
     function setAgentAuthorization(address agent, bool authorized) external onlyOwner {

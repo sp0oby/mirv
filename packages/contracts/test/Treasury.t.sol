@@ -89,24 +89,62 @@ contract TreasuryTest is Test {
         assertEq(address(treasury).balance, 0);
     }
 
-    // ─── setSafe ──────────────────────────────────────────────────────────────
+    // ─── Safe timelock (R-5) ──────────────────────────────────────────────────
 
-    function test_setSafeByOwner() public {
+    function test_proposeAndExecuteSafe() public {
         address newSafe = makeAddr("newSafe");
+        address oldSafe = treasury.safe();
+
         vm.prank(owner);
-        treasury.setSafe(newSafe);
+        treasury.proposeSafe(newSafe);
+        assertEq(treasury.pendingSafe(), newSafe);
+        assertEq(treasury.pendingSafeEffectiveAt(), block.timestamp + treasury.SAFE_TIMELOCK_DELAY());
+        assertEq(treasury.safe(), oldSafe);
+
+        vm.expectRevert(Treasury.TimelockNotReady.selector);
+        treasury.executeSafe();
+
+        vm.warp(block.timestamp + treasury.SAFE_TIMELOCK_DELAY());
+        treasury.executeSafe();
+
         assertEq(treasury.safe(), newSafe);
+        assertEq(treasury.pendingSafe(), address(0));
     }
 
-    function test_setSafeByNonOwnerReverts() public {
+    function test_proposeSafeByNonOwnerReverts() public {
         vm.expectRevert();
         vm.prank(alice);
-        treasury.setSafe(makeAddr("newSafe"));
+        treasury.proposeSafe(makeAddr("newSafe"));
     }
 
-    function test_setSafeZeroReverts() public {
+    function test_proposeSafeZeroReverts() public {
         vm.expectRevert(Treasury.ZeroAddress.selector);
         vm.prank(owner);
-        treasury.setSafe(address(0));
+        treasury.proposeSafe(address(0));
+    }
+
+    function test_executeSafeRevertsIfNoPending() public {
+        vm.expectRevert(Treasury.NoPendingSafe.selector);
+        treasury.executeSafe();
+    }
+
+    function test_cancelPendingSafe() public {
+        address newSafe = makeAddr("newSafe");
+        vm.prank(owner);
+        treasury.proposeSafe(newSafe);
+
+        vm.prank(owner);
+        treasury.cancelPendingSafe();
+        assertEq(treasury.pendingSafe(), address(0));
+
+        vm.warp(block.timestamp + treasury.SAFE_TIMELOCK_DELAY());
+        vm.expectRevert(Treasury.NoPendingSafe.selector);
+        treasury.executeSafe();
+    }
+
+    function test_cancelPendingSafeRevertsIfNothingPending() public {
+        vm.expectRevert(Treasury.NoPendingSafe.selector);
+        vm.prank(owner);
+        treasury.cancelPendingSafe();
     }
 }

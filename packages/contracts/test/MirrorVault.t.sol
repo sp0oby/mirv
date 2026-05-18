@@ -175,17 +175,150 @@ contract MirrorVaultTest is TestBase {
 
     // ─── Admin ────────────────────────────────────────────────────────────────
 
-    function test_setTreasury() public {
+    // ─── Treasury timelock (R-5) ──────────────────────────────────────────────
+
+    function test_proposeAndExecuteTreasury() public {
         address newTreasury = makeAddr("newTreasury");
+        address oldTreasury = vault.treasury();
+
         vm.prank(owner);
-        vault.setTreasury(newTreasury);
+        vault.proposeTreasury(newTreasury);
+        assertEq(vault.pendingTreasury(), newTreasury);
+        assertEq(vault.pendingTreasuryEffectiveAt(), block.timestamp + vault.TREASURY_TIMELOCK_DELAY());
+        // Treasury not yet rotated
+        assertEq(vault.treasury(), oldTreasury);
+
+        // Premature execution must revert
+        vm.expectRevert(MirrorVault.TimelockNotReady.selector);
+        vault.executeTreasury();
+
+        // After the delay anyone may execute
+        vm.warp(block.timestamp + vault.TREASURY_TIMELOCK_DELAY());
+        vault.executeTreasury();
+
         assertEq(vault.treasury(), newTreasury);
+        assertEq(vault.pendingTreasury(), address(0));
+        assertEq(vault.pendingTreasuryEffectiveAt(), 0);
     }
 
-    function test_setTreasuryZeroAddressReverts() public {
+    function test_proposeTreasuryZeroAddressReverts() public {
         vm.expectRevert(MirrorVault.ZeroAddress.selector);
         vm.prank(owner);
-        vault.setTreasury(address(0));
+        vault.proposeTreasury(address(0));
+    }
+
+    function test_proposeTreasuryOnlyOwner() public {
+        vm.expectRevert();
+        vm.prank(alice);
+        vault.proposeTreasury(makeAddr("newTreasury"));
+    }
+
+    function test_executeTreasuryRevertsIfNoPending() public {
+        vm.expectRevert(MirrorVault.NoPendingTreasury.selector);
+        vault.executeTreasury();
+    }
+
+    function test_cancelPendingTreasury() public {
+        address newTreasury = makeAddr("newTreasury");
+        vm.prank(owner);
+        vault.proposeTreasury(newTreasury);
+
+        vm.prank(owner);
+        vault.cancelPendingTreasury();
+        assertEq(vault.pendingTreasury(), address(0));
+        assertEq(vault.pendingTreasuryEffectiveAt(), 0);
+
+        // Now executing without a fresh proposal must revert
+        vm.warp(block.timestamp + vault.TREASURY_TIMELOCK_DELAY());
+        vm.expectRevert(MirrorVault.NoPendingTreasury.selector);
+        vault.executeTreasury();
+    }
+
+    function test_cancelPendingTreasuryRevertsIfNothingPending() public {
+        vm.expectRevert(MirrorVault.NoPendingTreasury.selector);
+        vm.prank(owner);
+        vault.cancelPendingTreasury();
+    }
+
+    function test_proposeTreasuryOverwritesPriorProposal() public {
+        address a = makeAddr("treasuryA");
+        address b = makeAddr("treasuryB");
+
+        vm.startPrank(owner);
+        vault.proposeTreasury(a);
+        // Advance partway, then overwrite — timer should reset to a full delay
+        vm.warp(block.timestamp + 12 hours);
+        vault.proposeTreasury(b);
+        vm.stopPrank();
+
+        assertEq(vault.pendingTreasury(), b);
+        assertEq(vault.pendingTreasuryEffectiveAt(), block.timestamp + vault.TREASURY_TIMELOCK_DELAY());
+
+        // Executing exactly at the original effective-time of `a` must still revert —
+        // the overwrite to `b` reset the timer.
+        vm.warp(block.timestamp + 12 hours);
+        vm.expectRevert(MirrorVault.TimelockNotReady.selector);
+        vault.executeTreasury();
+    }
+
+    // ─── updateCrossChainAssets bound (R-1) ───────────────────────────────────
+
+    function test_updateCrossChainAssetsBypassWhenPriorZero() public {
+        // Initial bootstrapping: prior == 0, any value should be accepted.
+        vm.prank(agent);
+        vault.updateCrossChainAssets(1_000_000e6);
+        assertEq(vault.crossChainAssetsReported(), 1_000_000e6);
+    }
+
+    function test_updateCrossChainAssetsEnforcesMaxDelta() public {
+        // Bootstrap a non-zero prior so the bound becomes active.
+        vm.prank(agent);
+        vault.updateCrossChainAssets(1000e6);
+
+        // Default cap is 2500 BPS = 25%. A jump of >25% must revert.
+        vm.prank(agent);
+        vm.expectRevert(MirrorVault.CrossChainAssetsDeltaTooLarge.selector);
+        vault.updateCrossChainAssets(1500e6); // 50% jump — rejected
+
+        // A jump within the cap is accepted.
+        vm.prank(agent);
+        vault.updateCrossChainAssets(1200e6); // 20% jump — fine
+        assertEq(vault.crossChainAssetsReported(), 1200e6);
+
+        // Symmetric: large DOWN moves are also rejected.
+        vm.prank(agent);
+        vm.expectRevert(MirrorVault.CrossChainAssetsDeltaTooLarge.selector);
+        vault.updateCrossChainAssets(800e6); // 33% drop — rejected
+    }
+
+    function test_setMaxCrossChainAssetsDeltaBpsOwnerOnly() public {
+        vm.expectRevert();
+        vm.prank(alice);
+        vault.setMaxCrossChainAssetsDeltaBps(5000);
+
+        vm.prank(owner);
+        vault.setMaxCrossChainAssetsDeltaBps(5000);
+        assertEq(vault.maxCrossChainAssetsDeltaBps(), 5000);
+    }
+
+    function test_setMaxCrossChainAssetsDeltaBpsBounded() public {
+        vm.expectRevert(MirrorVault.ZeroAmount.selector);
+        vm.prank(owner);
+        vault.setMaxCrossChainAssetsDeltaBps(10_001);
+    }
+
+    function test_setMaxCrossChainAssetsDeltaBpsTo10000Disables() public {
+        vm.prank(agent);
+        vault.updateCrossChainAssets(1000e6);
+
+        // Owner widens to MAX_BPS (100%) — effectively disables the gate.
+        vm.prank(owner);
+        vault.setMaxCrossChainAssetsDeltaBps(10_000);
+
+        // A 100% jump now passes. (Anything strictly >100% still reverts; that's by design.)
+        vm.prank(agent);
+        vault.updateCrossChainAssets(2000e6);
+        assertEq(vault.crossChainAssetsReported(), 2000e6);
     }
 
     // ─── Chain registry (Phase A extensibility) ───────────────────────────────

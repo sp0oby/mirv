@@ -3,7 +3,7 @@
 **Legend:** `[x]` done & tested · `[ ]` not started · `[~]` in progress · `[?]` blocked / needs decision
 **Updated:** 2026-05-18 (post-soak-audit pass)
 
-**Current build status:** ✅ `forge build` green · ✅ `forge test` **85/85** passing (73 unit/invariant + 12 fork) · ✅ `tsc` zero errors · ✅ v5 testnet live on Base Sepolia + ETH Sepolia, all 6 contracts verified · ✅ CI green on `main` · ✅ Phase A (canonical pairId dispatch) + Phase D (CCTP deposit) validated end-to-end on v5 · 🟡 Phase 5.B agent soak: 6-bug audit + deterministic cast verification landed (commit `342a8aa`); confirming live-agent run deferred until system is free.
+**Current build status:** ✅ `forge build` green · ✅ `forge test` **111/111** passing (90 unit/invariant + 21 fork) · ✅ `tsc` zero errors · ✅ v5 testnet live on Base Sepolia + ETH Sepolia, all 6 contracts verified · ✅ CI green on `main` · ✅ Phase A (canonical pairId dispatch) + Phase D (CCTP deposit) validated end-to-end on v5 · ✅ Pre-audit hardening (R-1 + R-5) landed, tagged `v1.0.0-rc2` · 🟡 Phase 5.B agent soak: 6-bug audit + deterministic cast verification landed; confirming live-agent run deferred until system is free.
 
 **v5 testnet addresses** (deployed 2026-05-17, see README §16 for explorer links):
 - Base Sepolia: Treasury `0x24FAb487…ea2b` · Hook `0x6184B71D…0540` · Vault `0x6C2288CB…7934` · Factory `0x0C7a7cdD…74c2`
@@ -420,7 +420,7 @@ The mirv agents use a shared **Anthropic** API key + a single shared `AGENT_PRIV
 - [x] **v5 testnet redeploy** — done 2026-05-17. v1-v4 contracts abandoned on testnet (small stranded balances acceptable).
 - [x] **Token-order assumption in `_updateLocalDepth` + `_eventUsdValue`** — *mainnet impact: none if pool is always WETH/USDC with WETH < USDC ordering (matches Base mainnet).* On testnet the ordering is reversed (USDC < WETH), so stored USD values are unit-skewed. Dispatch mechanism still triggers correctly. Generalization (per-pair oracle config) deferred — not blocking mainnet for the initial ETH/USDC pair on Base.
 - [ ] **Pool registration / initialization / funding on destination Relayer for executable deliveries** — pool IS registered + initialized on ETH Sepolia for canonical pairId. Relayer USDC inventory grows naturally from CCTP deliveries (now has 0.4 USDC from the Phase D smoke). Relayer WETH inventory needs treasury seeding before non-zero-delta dispatches succeed — that's a launch-day op step per BRIDGE-DESIGN.md §3.2, not a contract change.
-- [ ] **Investigate `withdrawEth` revert on Base Sepolia** (low-priority pre-mainnet hygiene). The function reverts at `(bool ok,) = owner().call{value: amount}("")` on Base Sepolia even when all preconditions hold. Works fine on ETH Sepolia. Orphaned ~0.04 ETH across the v1-v4 abandoned hooks on Base Sepolia. Needs `cast trace` or Foundry replay before mainnet to understand the failure mode.
+- [x] **Investigate `withdrawEth` revert on Base Sepolia** (2026-05-18, see Phase 6 resolution entry above) — v5 cast-estimates cleanly on both chains, fork test added; original observation was v1-v4 specific and the ~0.04 ETH across abandoned hooks is sunk testnet cost.
 - [ ] **Hyperlane testnet delivery latency** — testnet relayers are best-effort (1–5 min to never). Mainnet is reliable; not blocking.
 
 ---
@@ -430,12 +430,13 @@ The mirv agents use a shared **Anthropic** API key + a single shared `AGENT_PRIV
 - [x] Slither + Mythril triage done as part of v5 hardening (2026-05-17). Slither P0/P1 resolved; Mythril SWC-101 noise on 0.8+ documented.
 - [x] Foundry test suite: **85/85 passing** (73 unit + invariant + 12 fork). Re-runs cleanly on every commit via CI.
 - [x] BRIDGE-DESIGN.md documents value-plane architecture (CCTP for USDC, treasury-seeded WETH inventory, async withdrawal, BNB enablement runbook).
-- [x] Freeze contract versions — annotated tag `v1.0.0-rc1` at `7f937e2` pushed to origin 2026-05-18. Contracts byte-identical to v5 hardening (`94fbdaa`); tag note enumerates audit scope, test/Slither/Mythril state, and known open items. Auditors should reference `git checkout v1.0.0-rc1`.
+- [x] Freeze contract versions — annotated tag `v1.0.0-rc1` at `7f937e2` pushed to origin 2026-05-18. Contracts byte-identical to v5 hardening (`94fbdaa`); tag note enumerates audit scope, test/Slither/Mythril state, and known open items.
+- [x] **Pre-audit hardening pass landed 2026-05-18** — R-1 (bound `updateCrossChainAssets` delta) + R-5 (timelock on `setTreasury` / `setMailbox` / `setSafe`) + withdrawEth regression test + audit doc updates. `forge test` 111/111 green (was 85; +26 new tests). Slither: 19 in-scope findings, 0 new from rc1. Re-tagged as **`v1.0.0-rc2`** — this is the new audit candidate.
 - [x] `audits/THREAT-MODEL.md` (2026-05-18) — 8 actors enumerated (user, agent EOA, owner multisig, Hyperlane, Circle CCTP, oracle, sister hook, V4 PoolManager) + composition risks + 13 numbered recommendations (R-1..R-13) graded high/medium/low for audit triage.
 - [x] `audits/SCOPE.md` (2026-05-18) — in/out scope, function-by-function notes per contract, external-protocol trust roots, severity rubric. Anchored at `v1.0.0-rc1`.
 - [x] `audits/INVARIANTS.md` (2026-05-18) — 14 invariants (I-1..I-14) covering vault solvency, totalAssets decomposition, performance-fee accounting, share-supply consistency, allocation sum, canonical pair identity, cooldown monotonicity, hook permission bits, sister-message auth, ETH custody, CCTP approval residue, no infinite approvals, CEI, dispatch fee solvency. Each entry: statement, enforcement site, Foundry test coverage. Items marked **\[runner-gap\]** are highest-value places to add fuzz tests during audit prep.
 - [ ] `aeon-vuln-scanner` pass (Bankr skill) — needs Bankr account.
-- [ ] Investigate `withdrawEth` revert on Base Sepolia (carried from Phase 5) — must understand the failure mode before mainnet.
+- [x] Investigate `withdrawEth` revert on Base Sepolia (2026-05-18) — investigation showed v5 simulates cleanly on both Sepolia chains via `cast estimate`; the original failure was on the abandoned v1-v4 hooks and could not be reproduced. New fork test `test_withdrawEth` (HookCallback.t.sol) locks in the working behavior; on Base mainnet fork it had to `vm.etch(owner, hex"")` because `makeAddr("owner")` happens to collide with a deployed ETH-forwarder contract (artifact of testing on a real-state fork, not a contract bug). The ~0.04 ETH stranded across v1-v4 abandoned hooks is sunk testnet cost.
 - [ ] Set up internal Cantina/Zellic preference (decision deferred per memory)
 - [ ] Submit audit package
 - [ ] Triage findings → Critical/High fixed pre-mainnet; Medium tracked

@@ -1,6 +1,6 @@
 # mirv — Invariants
 
-**Tag:** `v1.0.0-rc1` (commit `7f937e2`)
+**Tag:** `v1.0.0-rc2` (R-1 + R-5 hardening landed; see I-15 and I-16 below).
 
 Properties that must hold across every reachable post-transaction state. Each entry: the invariant statement, where it's enforced, why a violation matters, and how it's tested today.
 
@@ -206,6 +206,42 @@ The Foundry invariant suite (`test/invariant/VaultInvariants.t.sol`) covers the 
 
 ---
 
+## I-15. `updateCrossChainAssets` bounded delta (R-1)
+
+> After the first non-zero report, every subsequent `updateCrossChainAssets` call satisfies `|newValue - prior| * MAX_BPS ≤ prior * maxCrossChainAssetsDeltaBps`.
+
+**Why:** Closes the highest-leverage agent-EOA-compromise path. A compromised agent can no longer inflate `totalAssets` by more than `maxCrossChainAssetsDeltaBps` (default 25%) in a single tx.
+
+**Enforced by:** `MirrorVault.updateCrossChainAssets` (l. 280-292) — explicit delta check, reverts `CrossChainAssetsDeltaTooLarge`.
+
+**Boundary conditions:**
+- `prior == 0` (initial bootstrapping) is allowed unbounded so the operator can set the first value at deploy.
+- Owner can adjust `maxCrossChainAssetsDeltaBps` up to `MAX_BPS` (100%) via `setMaxCrossChainAssetsDeltaBps` if a planned migration requires a one-off large change.
+
+**Tested by:** `MirrorVault.t.sol` — `test_updateCrossChainAssetsBypassWhenPriorZero`, `test_updateCrossChainAssetsEnforcesMaxDelta`, `test_setMaxCrossChainAssetsDeltaBpsOwnerOnly`, `test_setMaxCrossChainAssetsDeltaBpsBounded`, `test_setMaxCrossChainAssetsDeltaBpsTo10000Disables`.
+
+---
+
+## I-16. Timelocked rotation of trust-root addresses (R-5)
+
+> `treasury` (Vault), `mailbox` (Relayer), and `safe` (Treasury) cannot change without (a) an owner-issued `propose*` call, AND (b) at least `*_TIMELOCK_DELAY` (24h) of wall-clock time, AND (c) the absence of an intervening `cancelPending*` call by the owner.
+
+**Why:** A compromised owner key can no longer instantly redirect performance fees, spoof message authentication, or change the fee destination. The 24h window gives the watching multisig + off-chain monitor time to call `cancelPending*` and `pause`.
+
+**Enforced by:**
+- `MirrorVault.proposeTreasury` / `executeTreasury` / `cancelPendingTreasury` (l. 350-385).
+- `Relayer.proposeMailbox` / `executeMailbox` / `cancelPendingMailbox` (l. 207-235).
+- `Treasury.proposeSafe` / `executeSafe` / `cancelPendingSafe` (l. 86-114).
+
+**Execute-permissionless design:** `execute*` is callable by anyone after the delay (not `onlyOwner`). The propose-step already costs an owner multisig tx, so requiring a second owner tx to execute is friction without security gain. The cancel-step IS `onlyOwner`. Overwriting a pending proposal resets the timer (tested via `test_proposeTreasuryOverwritesPriorProposal`).
+
+**Tested by:**
+- `MirrorVault.t.sol`: `test_proposeAndExecuteTreasury`, `test_proposeTreasuryZeroAddressReverts`, `test_proposeTreasuryOnlyOwner`, `test_executeTreasuryRevertsIfNoPending`, `test_cancelPendingTreasury`, `test_cancelPendingTreasuryRevertsIfNothingPending`, `test_proposeTreasuryOverwritesPriorProposal`.
+- `Relayer.t.sol`: parallel suite (`test_proposeAndExecuteMailbox`, etc.).
+- `Treasury.t.sol`: parallel suite (`test_proposeAndExecuteSafe`, etc.).
+
+---
+
 ## Properties out of scope as on-chain invariants (operator-side)
 
 These hold by procedure, not code. Auditor should flag if any could be promoted to an on-chain check:
@@ -236,5 +272,7 @@ These hold by procedure, not code. Auditor should flag if any could be promoted 
 | I-12 no infinite approvals | ✅ | Source-level invariant |
 | I-13 CEI on dispatches | ✅ | Slither closed |
 | I-14 Hyperlane fee solvency | partial | inspection — DOS-safe wrap could use explicit test |
+| I-15 updateCrossChainAssets bounded delta (R-1) | ✅ | `MirrorVault.t.sol` — 5 unit tests |
+| I-16 Timelocked trust-root rotation (R-5) | ✅ | Vault/Relayer/Treasury — 7+5+5 unit tests |
 
 Items marked **partial** or **inspection** are the highest-value places to add new invariant fuzz tests during audit prep.
