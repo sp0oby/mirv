@@ -373,5 +373,8 @@ These hold by procedure, not code. Auditor should flag if any could be promoted 
 | I-20 Oracle deviation cross-check (R-11) | ✅ | Hook — 3 fork tests |
 | I-21 Sister-depth cap on inbound handle (R-13) | ✅ | Hook — 2 fork tests |
 | I-22 Relayer rebalance execution math (rc5) | ✅ | Relayer end-to-end via HookCallback fork test |
+| I-5 allocation sum (runner-gap closed) | ✅ | `invariant_allocationSumIsZeroOrFull` + 3 new VaultHandler actions |
+| I-16 timelock pendingTreasury consistency (strengthened) | ✅ | `invariant_pendingTreasuryConsistency` |
+| I-19 guardian fixture stable under fuzz | ✅ | `invariant_guardianStillConfigured` |
 
 Items marked **partial** or **inspection** are the highest-value places to add new invariant fuzz tests during audit prep.

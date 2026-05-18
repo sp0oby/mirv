@@ -1,0 +1,194 @@
+# mirv — Tenderly alert specs
+#
+# Each alert below corresponds to a row in audits/OPERATIONS.md §7.
+# Translate into Tenderly's UI (Alerts → Create New) or the API when wiring.
+# Placeholders in `{{ ... }}` are filled from `.env` at provisioning time.
+#
+# Tag this against contracts at v1.0.0-rc5 or later — earlier rcs lack
+# several of the events referenced (CrossChainAssetsUpdated old/new pair,
+# SisterDepthCapped, OracleDeviationTooLarge revert reasons).
+
+version: 1
+
+defaults:
+  # All alerts page the same on-call rotation by default; OPERATIONS.md §5
+  # has the per-alert escalation policy.
+  destination: oncall
+  # Don't fire on simulations (Tenderly's tx forks etc.)
+  network_filter: [base, base-sepolia, ethereum, ethereum-sepolia]
+
+alerts:
+  # ─── R-1 layer: agent compromise probe ─────────────────────────────────────
+  - id: large_crosschain_delta_event
+    description: >
+      CrossChainAssetsUpdated fired with (newValue / max(oldValue,1)) > 1.20.
+      Either the agent reported a > 20% jump (legitimate but worth seeing) or
+      something probed the R-1 cap. The agent's normal cadence is sub-hourly,
+      so a 20% per-call jump is suspicious unless we're harvesting.
+    trigger:
+      type: event
+      contract: "{{ MIRROR_VAULT_BASE }}"
+      event: "CrossChainAssetsUpdated(uint256 oldValue, uint256 newValue)"
+      condition: "newValue > oldValue + (oldValue / 5)"
+    severity: warning
+    page: true
+
+  - id: crosschain_delta_rejected_burst
+    description: >
+      CrossChainAssetsDeltaTooLarge revert seen >= 3 times in 15 min.
+      The agent is being driven by something or buggy upstream.
+    trigger:
+      type: revert_rate
+      contract: "{{ MIRROR_VAULT_BASE }}"
+      revert_signature: "CrossChainAssetsDeltaTooLarge()"
+      window_minutes: 15
+      threshold: 3
+    severity: critical
+    page: true
+
+  # ─── R-5 layer: trust-root rotation ────────────────────────────────────────
+  - id: treasury_proposal
+    description: >
+      TreasuryProposed event — a 24h timelock has started on the vault's
+      treasury address. Verify the proposal is expected; if not, owner must
+      cancelPendingTreasury BEFORE effectiveAt.
+    trigger:
+      type: event
+      contract: "{{ MIRROR_VAULT_BASE }}"
+      event: "TreasuryProposed(address indexed newTreasury, uint256 effectiveAt)"
+    severity: critical
+    page: true
+
+  - id: mailbox_proposal
+    description: >
+      MailboxProposed event on Relayer — Hyperlane mailbox rotation started.
+      Compromised owner could use this to spoof handle() messages after the
+      24h window. Cancel if unexpected.
+    trigger:
+      type: event
+      contract: "{{ RELAYER_MAINNET }}"
+      event: "MailboxProposed(address indexed newMailbox, uint256 effectiveAt)"
+    severity: critical
+    page: true
+
+  - id: safe_proposal
+    description: >
+      SafeProposed event on Treasury — the Gnosis Safe destination for fees
+      is being rotated. Cancel if unexpected.
+    trigger:
+      type: event
+      contract: "{{ TREASURY_BASE }}"
+      event: "SafeProposed(address indexed newSafe, uint256 effectiveAt)"
+    severity: critical
+    page: true
+
+  # ─── Agent EOA observability ───────────────────────────────────────────────
+  - id: agent_unauthorized_call_set
+    description: >
+      Agent EOA transaction outside the expected call set
+      {updateCrossChainAssets, harvest, dispatchRebalance, fulfillWithdraw,
+      recordRebalance, updateBaselineApy, reportSisterDepth}. Any other
+      function selector from this address is suspicious.
+    trigger:
+      type: address_activity
+      address: "{{ AGENT_WALLET }}"
+      allowed_selectors:
+        - "0x9a0e7d66" # updateCrossChainAssets(uint256)
+        - "0x4641257d" # harvest()
+        - "0xb37b0c35" # dispatchRebalance(int128,int128,uint24,int24,int24)
+        - "0x9e8d6db4" # fulfillWithdraw(uint256)
+        - "0xb29a6b8e" # recordRebalance(uint256,uint256)
+        - "0x2cf42a1d" # updateBaselineApy(uint256)
+        - "0x9e3c1c7d" # reportSisterDepth(uint32,uint256)
+      # NOTE: re-derive these selectors with `cast sig 'updateCrossChainAssets(uint256)'`
+      # at provisioning time — keep them in sync with the rc5 ABIs.
+    severity: warning
+    page: true
+
+  # ─── Hook dispatch + oracle ────────────────────────────────────────────────
+  - id: dispatch_failed_event
+    description: >
+      MirrorHook.DispatchFailed — one sister's mailbox.dispatch reverted.
+      The DOS-safe try/catch caught it (good) but the sister side needs
+      investigation. Look for paused mailbox / missing IGP route.
+    trigger:
+      type: event
+      contract: "{{ MIRROR_HOOK_BASE }}"
+      event: "DispatchFailed(uint32 indexed destinationDomain, bytes32 pairId, bytes reason)"
+    severity: warning
+    page: false
+
+  - id: oracle_deviation_revert
+    description: >
+      OracleDeviationTooLarge revert from _getOraclePrice. Pyth and
+      Chainlink disagree by > 5% on the same asset. Real market events
+      occasionally trip this; pause + investigate before unpause.
+    trigger:
+      type: revert_signature
+      contract: "{{ MIRROR_HOOK_BASE }}"
+      revert_signature: "OracleDeviationTooLarge()"
+    severity: critical
+    page: true
+
+  - id: sister_depth_capped
+    description: >
+      SisterDepthCapped event on MirrorHook. A sister chain reported a
+      depth value that R-13's bound truncated. Either a compromised sister
+      or a buggy peer. Inspect the (reported, capped) values + the origin
+      domain; consider revoking the sister from setAuthorizedSender.
+    trigger:
+      type: event
+      contract: "{{ MIRROR_HOOK_BASE }}"
+      event: "SisterDepthCapped(uint32 indexed origin, uint256 reported, uint256 capped)"
+    severity: warning
+    page: true
+
+  # ─── Operational state ─────────────────────────────────────────────────────
+  - id: vault_paused
+    description: >
+      MirrorVault Paused event — fired by owner or guardian. If unexpected,
+      page the multisig.
+    trigger:
+      type: event
+      contract: "{{ MIRROR_VAULT_BASE }}"
+      event: "Paused(address account)"
+    severity: critical
+    page: true
+
+  - id: hook_paused
+    description: >
+      MirrorHook Paused event — fired by owner or guardian. Halts cross-chain
+      dispatch + handle().
+    trigger:
+      type: event
+      contract: "{{ MIRROR_HOOK_BASE }}"
+      event: "Paused(address account)"
+    severity: critical
+    page: true
+
+  - id: hook_low_eth_balance
+    description: >
+      MirrorHook native ETH balance < 0.01 ETH. Each Hyperlane dispatch
+      consumes ~fee wei; running dry means cross-chain notifications stop
+      firing. Top up via fund().
+    trigger:
+      type: balance_threshold
+      address: "{{ MIRROR_HOOK_BASE }}"
+      currency: native
+      below: 10_000_000_000_000_000 # 0.01 ETH in wei
+      check_interval_minutes: 5
+    severity: warning
+    page: false
+
+  - id: agent_wallet_low_balance
+    description: >
+      Agent EOA native balance < 0.05 ETH per chain. Agent can't pay gas
+      for harvest / fulfillWithdraw / dispatchRebalance.
+    trigger:
+      type: balance_threshold
+      address: "{{ AGENT_WALLET }}"
+      currency: native
+      below: 50_000_000_000_000_000 # 0.05 ETH in wei
+      check_interval_minutes: 5
+    severity: warning
+    page: true

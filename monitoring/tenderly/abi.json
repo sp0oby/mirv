@@ -1,0 +1,62 @@
+{
+  "_description": "Event signatures referenced by tenderly/alerts.yml. Extracted from contracts at v1.0.0-rc5. Regenerate via `forge inspect MirrorVault events` etc. when contract events change.",
+  "MirrorVault": [
+    "event CrossChainAssetsUpdated(uint256 oldValue, uint256 newValue)",
+    "event TreasuryProposed(address indexed newTreasury, uint256 effectiveAt)",
+    "event TreasuryCancelled(address indexed cancelled)",
+    "event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury)",
+    "event GuardianUpdated(address indexed oldGuardian, address indexed newGuardian)",
+    "event MaxCrossChainAssetsDeltaUpdated(uint256 oldBps, uint256 newBps)",
+    "event CrossChainAssetsMaxStalenessUpdated(uint256 oldSeconds, uint256 newSeconds)",
+    "event PerformanceFeePaid(uint256 extraYield, uint256 feeShares, address indexed treasury)",
+    "event ChainAdded(uint32 indexed hyperlaneDomain, uint16 allocationBps)",
+    "event ChainRemoved(uint32 indexed hyperlaneDomain)",
+    "event AllocationsUpdated(uint32[] domains, uint16[] bps)",
+    "event CctpBridgeSent(uint32 indexed cctpDomain, bytes32 indexed recipient, uint256 amount, uint64 nonce)",
+    "event CctpBridgeSkipped(uint32 indexed cctpDomain, bytes32 indexed recipient, uint256 amount, bytes reason)",
+    "event WithdrawRequested(uint256 indexed requestId, address indexed requester, address receiver, uint256 shares, uint256 expectedAssets)",
+    "event WithdrawFulfilled(uint256 indexed requestId, address indexed receiver, uint256 assetsPaid)",
+    "event WithdrawCancelled(uint256 indexed requestId)",
+    "event Paused(address account)",
+    "event Unpaused(address account)"
+  ],
+  "MirrorHook": [
+    "event RebalanceDispatched(bytes32 indexed messageId, uint32 destinationDomain, bytes32 pairId)",
+    "event ImbalanceDetected(bytes32 indexed pairId, uint256 imbalanceBps, uint256 driftBps)",
+    "event DispatchFailed(uint32 indexed destinationDomain, bytes32 pairId, bytes reason)",
+    "event SisterDepthReported(uint32 indexed domain, bytes32 pairId, uint256 depthUsd)",
+    "event SisterNotificationReceived(uint32 indexed origin, bytes32 indexed sender, bytes32 pairId, uint256 reportedDepth)",
+    "event SisterDepthCapped(uint32 indexed origin, uint256 reported, uint256 capped)",
+    "event GuardianUpdated(address indexed oldGuardian, address indexed newGuardian)",
+    "event MaxSisterDepthMultipleUpdated(uint256 oldMultiple, uint256 newMultiple)",
+    "event OracleDeviationToleranceUpdated(uint256 oldBps, uint256 newBps)",
+    "event Paused(address account)",
+    "event Unpaused(address account)"
+  ],
+  "Relayer": [
+    "event MessageReceived(uint32 indexed origin, bytes32 indexed sender, bytes32 messageId)",
+    "event RebalanceExecuted(bytes32 indexed pairId, int128 deltaToken0, int128 deltaToken1)",
+    "event PoolRegistered(bytes32 indexed pairId, bytes32 poolId)",
+    "event MailboxProposed(address indexed newMailbox, uint256 effectiveAt)",
+    "event MailboxCancelled(address indexed cancelled)",
+    "event MailboxUpdated(address indexed oldMailbox, address indexed newMailbox)"
+  ],
+  "Treasury": [
+    "event SafeProposed(address indexed newSafe, uint256 effectiveAt)",
+    "event SafeCancelled(address indexed cancelled)",
+    "event SafeUpdated(address indexed oldSafe, address indexed newSafe)",
+    "event FeeForwarded(address indexed token, address indexed to, uint256 amount)",
+    "event EthForwarded(address indexed to, uint256 amount)"
+  ],
+  "_revert_signatures_referenced_in_alerts": [
+    "CrossChainAssetsDeltaTooLarge()",
+    "CrossChainAssetsStale()",
+    "OracleDeviationTooLarge()",
+    "CctpRecipientRequired()",
+    "TimelockNotReady()",
+    "NoPendingTreasury()",
+    "NoPendingMailbox()",
+    "NoPendingSafe()",
+    "NotGuardianOrOwner()"
+  ]
+}
