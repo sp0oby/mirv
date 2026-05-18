@@ -24,7 +24,9 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: nightly
+          # Pinned to stable to avoid the foundryup nightly-tag GitHub API
+          # rate-limit (403) that took out the slither job on commit 0893b5a.
+          version: stable
 
       - name: Install Solidity dependencies
         # lib/ is gitignored — forge dependencies aren't checked in. Re-install them
@@ -62,7 +64,9 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: nightly
+          # Pinned to stable to avoid the foundryup nightly-tag GitHub API
+          # rate-limit (403) that took out the slither job on commit 0893b5a.
+          version: stable
 
       - name: Install Solidity dependencies
         run: forge install --no-git foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts OpenZeppelin/uniswap-hooks
