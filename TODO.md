@@ -430,7 +430,7 @@ The mirv agents use a shared **Anthropic** API key + a single shared `AGENT_PRIV
 - [x] Slither + Mythril triage done as part of v5 hardening (2026-05-17). Slither P0/P1 resolved; Mythril SWC-101 noise on 0.8+ documented.
 - [x] Foundry test suite: **85/85 passing** (73 unit + invariant + 12 fork). Re-runs cleanly on every commit via CI.
 - [x] BRIDGE-DESIGN.md documents value-plane architecture (CCTP for USDC, treasury-seeded WETH inventory, async withdrawal, BNB enablement runbook).
-- [ ] Freeze contract versions (tag a `v1.0.0-rc1` git tag) — v5 hardening committed as `94fbdaa`, deployed at `d09a661`. Ready to tag.
+- [x] Freeze contract versions — annotated tag `v1.0.0-rc1` at `7f937e2` pushed to origin 2026-05-18. Contracts byte-identical to v5 hardening (`94fbdaa`); tag note enumerates audit scope, test/Slither/Mythril state, and known open items. Auditors should reference `git checkout v1.0.0-rc1`.
 - [ ] Write `audits/THREAT-MODEL.md` — every actor (user, agent EOA, owner multisig, Hyperlane validator, Circle attester, malicious sister), attack surface, mitigation
 - [ ] Write `audits/SCOPE.md` — files in/out of scope, function-by-function notes. In-scope: MirrorHook, MirrorVault, MirrorFactory, Relayer, Treasury. Out-of-scope: OZ + V4 + Hyperlane + CCTP (dep audits).
 - [ ] Write `audits/INVARIANTS.md` — what must always hold:
