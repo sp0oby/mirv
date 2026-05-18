@@ -17,6 +17,7 @@ import {PoolModifyLiquidityTest} from "v4-core/src/test/PoolModifyLiquidityTest.
 
 import {MirrorHook} from "../../src/MirrorHook.sol";
 import {Treasury} from "../../src/Treasury.sol";
+import {AggregatorV3Interface} from "../../src/interfaces/IChainlink.sol";
 
 /// @notice Validates the full V4 hook callback chain on a real Base mainnet fork:
 ///   add liquidity → afterAddLiquidity fires
@@ -404,6 +405,18 @@ contract HookCallbackTest is Test {
         }
         assertTrue(foundImbalance, "ImbalanceDetected must fire from afterAddLiquidity path");
         assertTrue(foundDispatch, "RebalanceDispatched must fire from afterAddLiquidity path");
+    }
+
+    // ─── chainlinkFeedDecimals caching (R-12) ─────────────────────────────────
+    /// @dev Locks in that the constructor caches the Chainlink aggregator's
+    ///      decimals so each oracle read can skip the external call. Asserts
+    ///      the cached value equals what the live feed reports on the Base fork
+    ///      (8 decimals for ETH/USD).
+    function test_chainlinkFeedDecimalsCached() public view {
+        uint8 cached = hook.chainlinkFeedDecimals();
+        uint8 live = AggregatorV3Interface(CHAINLINK_ETH_USD).decimals();
+        assertEq(cached, live, "constructor-cached decimals must match live feed");
+        assertEq(cached, 8, "Chainlink ETH/USD on Base reports 8 decimals");
     }
 
     // ─── withdrawEth regression (Phase 5.F resolution log) ────────────────────

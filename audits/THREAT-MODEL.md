@@ -1,6 +1,6 @@
 # mirv — Threat Model
 
-**Tag:** `v1.0.0-rc2` (R-1 + R-5 hardening landed; see status note below for R-1..R-13 disposition).
+**Tag:** `v1.0.0-rc3` (R-1, R-2, R-3, R-5, R-10, R-12 landed; see status table for R-1..R-13 disposition).
 
 This document enumerates the actors that can interact with the in-scope contracts (`audits/SCOPE.md`), their attack surfaces, and the mitigations in place. Severity uses the rubric in `SCOPE.md`.
 
@@ -256,16 +256,16 @@ The one interaction worth noting:
 |------|------------------------------------------------------------|-------------|---------------------------------------------------------------------------------------------|
 | R-1  | Bound `updateCrossChainAssets` delta                       | **LANDED**  | `maxCrossChainAssetsDeltaBps` default 2500 (25%). Owner-tunable. First non-zero set bypasses the gate so deploy-time bootstrapping is unconstrained. |
 | R-2  | Emit prior-value in `CrossChainAssetsUpdated`              | **LANDED**  | Event signature now `(uint256 oldValue, uint256 newValue)`.                                |
-| R-3  | Gate `harvest` on freshness of `crossChainAssetsReported`  | open        | Pending: not implemented — would require a per-update timestamp + max-staleness param.    |
+| R-3  | Gate `harvest` on freshness of `crossChainAssetsReported`  | **LANDED**  | `lastCrossChainAssetsUpdate` written on every update; `harvest()` reverts `CrossChainAssetsStale` if older than `crossChainAssetsMaxStaleness` (default 1 hour, owner-tunable). Skipped when no update has ever happened (pre-launch vaults). |
 | R-4  | Agent key rotation policy                                  | open / ops  | Runbook item, not on-chain.                                                                 |
 | R-5  | Timelock on `setTreasury` / `setMailbox` / `setSafe`       | **LANDED**  | `propose`/`execute`/`cancel` triplet on each. 24h delay. Anyone may execute after delay; only owner may propose / cancel. |
 | R-6  | Document multisig signing policy                           | open / ops  | Mainnet runbook item.                                                                       |
 | R-7  | Separate guardian role for pause-only                      | open        | Audit-decision; default Ownable kept for simplicity.                                       |
 | R-8  | Make `Relayer.mailbox` immutable                           | mitigated   | R-5 timelock closes the immediate-flip risk; immutability still cleaner but not blocking. |
 | R-9  | Document `setAuthorizedSender` admin sequence              | open / ops  |                                                                                             |
-| R-10 | `cctpRecipient != 0` check in `addChain`                   | open        | Two-line fix; left for audit-cycle consolidation.                                          |
+| R-10 | `cctpRecipient != 0` check in `addChain`                   | **LANDED**  | `addChain` reverts `CctpRecipientRequired` when `cctpDomain != 0` but `cctpRecipient == bytes32(0)`. Zero recipient still allowed when `cctpDomain == 0` (the "stay local" pattern). |
 | R-11 | Cross-oracle sanity check (Pyth vs Chainlink deviation)    | open        | Audit-decision; current fallback semantics may be sufficient.                              |
-| R-12 | Cache `chainlinkFeed.decimals()` in constructor            | open        | Gas/info; not blocking.                                                                     |
+| R-12 | Cache `chainlinkFeed.decimals()` in constructor            | **LANDED**  | New `chainlinkFeedDecimals` immutable set in `MirrorHook` constructor. Saves one external call per `_getOraclePrice()` invocation. Asserted equal to the live feed value on Base mainnet fork (`test_chainlinkFeedDecimalsCached`). |
 | R-13 | Cap sister-reported `currentDepth` value                   | open        | Audit-decision; current bound is on the consumer side (cooldown + threshold).               |
 
 ### Known open items (carried forward)

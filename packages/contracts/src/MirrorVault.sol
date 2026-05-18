@@ -69,6 +69,8 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     error NotRequester();
     error InvalidArrayLengths();
     error CrossChainAssetsDeltaTooLarge();
+    error CrossChainAssetsStale();
+    error CctpRecipientRequired();
     error TimelockNotReady();
     error NoPendingTreasury();
 
@@ -78,6 +80,7 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     ///      Dune) can alert on suspiciously large deltas without re-reading prior state.
     event CrossChainAssetsUpdated(uint256 oldValue, uint256 newValue);
     event MaxCrossChainAssetsDeltaUpdated(uint256 oldBps, uint256 newBps);
+    event CrossChainAssetsMaxStalenessUpdated(uint256 oldSeconds, uint256 newSeconds);
     event BaselineApyUpdated(uint256 newApyBps);
     event AgentAuthorizationUpdated(address indexed agent, bool authorized);
     event TreasuryProposed(address indexed newTreasury, uint256 effectiveAt);
@@ -160,6 +163,19 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     ///         Owner can adjust; the first non-zero set (when prior == 0) bypasses
     ///         this gate so legitimate bootstrapping is unconstrained.
     uint256 public maxCrossChainAssetsDeltaBps = 2500;
+
+    /// @notice Wall-clock timestamp of the last successful `updateCrossChainAssets`.
+    ///         Zero until the agent has reported at least once. `harvest()` refuses
+    ///         to run if this is non-zero and older than `crossChainAssetsMaxStaleness`
+    ///         seconds — protects against the "agent reports inflated value, then
+    ///         goes silent, then someone calls harvest a day later" path (R-3).
+    uint256 public lastCrossChainAssetsUpdate;
+
+    /// @notice Maximum age (seconds) of `lastCrossChainAssetsUpdate` accepted by
+    ///         `harvest()`. Defaults to 1 hour — covers agent restarts and RPC
+    ///         hiccups but tight enough to keep stale-data exploits from sitting
+    ///         around for a day waiting for the next harvest window. Owner-tunable.
+    uint256 public crossChainAssetsMaxStaleness = 1 hours;
 
     // ─── Treasury timelock state (R-5) ───────────────────────────────────────
     /// @notice Address proposed as the next treasury. Zero when no proposal is pending.
@@ -255,9 +271,19 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     // ─── Performance fee harvesting ───────────────────────────────────────────
 
     /// @notice Harvest accumulated performance fees. Callable by authorized agents.
+    /// @dev    R-3: Refuses to run if the cross-chain assets report is stale —
+    ///         prevents the "agent reports inflated value once, then goes silent,
+    ///         someone calls harvest a day later on the stale inflated number"
+    ///         attack. Skipped when no update has ever happened so vaults that
+    ///         haven't enabled any cross-chain routes can still harvest baseline-
+    ///         only yield.
     function harvest() external nonReentrant {
         if (!authorizedAgents[msg.sender]) revert NotAuthorizedAgent();
         if (block.timestamp - lastHarvestAt < MIN_HARVEST_INTERVAL) revert HarvestTooSoon();
+        if (
+            lastCrossChainAssetsUpdate != 0
+                && block.timestamp - lastCrossChainAssetsUpdate > crossChainAssetsMaxStaleness
+        ) revert CrossChainAssetsStale();
 
         _accrueBaseline();
 
@@ -299,6 +325,7 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
             }
         }
         crossChainAssetsReported = newValue;
+        lastCrossChainAssetsUpdate = block.timestamp; // R-3 freshness anchor
         emit CrossChainAssetsUpdated(prev, newValue);
     }
 
@@ -403,6 +430,11 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
         uint16 allocationBps
     ) external onlyOwner {
         if (chainConfigs[hyperlaneDomain].enabled) revert ChainAlreadyEnabled();
+        // R-10: if a CCTP route is intended (cctpDomain != 0), the recipient must
+        // be non-zero. A zero recipient on an active route would send USDC into
+        // a black hole on the first `_splitAndBridge`. (cctpDomain == 0 means
+        // "no CCTP route, keep funds local" — recipient is then ignored.)
+        if (cctpDomain != 0 && cctpRecipient == bytes32(0)) revert CctpRecipientRequired();
 
         chainConfigs[hyperlaneDomain] = ChainConfig({
             cctpDomain: cctpDomain,
@@ -542,6 +574,15 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
         if (newBps > MAX_BPS) revert ZeroAmount();
         emit MaxCrossChainAssetsDeltaUpdated(maxCrossChainAssetsDeltaBps, newBps);
         maxCrossChainAssetsDeltaBps = newBps;
+    }
+
+    /// @notice Owner-only setter for the max age of cross-chain reports accepted
+    ///         by `harvest()` (R-3). Set to a very large value to effectively
+    ///         disable the staleness gate. Zero means "must update in the same
+    ///         block as harvest" — likely too tight, included for completeness.
+    function setCrossChainAssetsMaxStaleness(uint256 newSeconds) external onlyOwner {
+        emit CrossChainAssetsMaxStalenessUpdated(crossChainAssetsMaxStaleness, newSeconds);
+        crossChainAssetsMaxStaleness = newSeconds;
     }
 
     /// @notice Step 1 of the timelocked treasury rotation (R-5). Records the

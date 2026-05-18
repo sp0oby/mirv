@@ -179,6 +179,10 @@ contract ForkBaseTest is Test {
 
         vm.warp(block.timestamp + 1 days + 1);
 
+        // R-3: refresh cross-chain report so it's fresh at harvest time.
+        vm.prank(agent);
+        vault.updateCrossChainAssets(5_000e6);
+
         uint256 treasurySharesBefore = vault.balanceOf(address(treasury));
 
         vm.prank(agent);

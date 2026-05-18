@@ -199,6 +199,9 @@ contract MirrorFlowTest is Test {
 
         // ── Step 6: Fast-forward 1 day + 1s, then harvest ──────────────────────────────────
         vm.warp(block.timestamp + 1 days + 1);
+        // R-3: refresh cross-chain report so the staleness gate doesn't block harvest.
+        vm.prank(agent);
+        vault.updateCrossChainAssets(crossChainYield);
         uint256 treasurySharesBefore = vault.balanceOf(address(treasury));
         vm.prank(agent);
         vault.harvest();

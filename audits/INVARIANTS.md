@@ -1,6 +1,6 @@
 # mirv — Invariants
 
-**Tag:** `v1.0.0-rc2` (R-1 + R-5 hardening landed; see I-15 and I-16 below).
+**Tag:** `v1.0.0-rc3` (R-1, R-2, R-3, R-5, R-10, R-12 landed; see I-15..I-18 below).
 
 Properties that must hold across every reachable post-transaction state. Each entry: the invariant statement, where it's enforced, why a violation matters, and how it's tested today.
 
@@ -222,6 +222,36 @@ The Foundry invariant suite (`test/invariant/VaultInvariants.t.sol`) covers the 
 
 ---
 
+## I-17. `harvest` requires fresh cross-chain report (R-3)
+
+> Every successful `harvest()` call satisfies either (a) `lastCrossChainAssetsUpdate == 0` (no report has ever happened — pre-launch state), OR (b) `block.timestamp - lastCrossChainAssetsUpdate ≤ crossChainAssetsMaxStaleness`.
+
+**Why:** Closes the "agent reports inflated value once, then goes silent, attacker waits a day, then calls harvest on the stale inflated number" path. Pairs with I-15 — together they bound a compromised agent to a small inflation factor AND require continuous reporting for any harvest to land.
+
+**Enforced by:** `MirrorVault.harvest` (l. 265-268) — explicit staleness check, reverts `CrossChainAssetsStale`. `MirrorVault.updateCrossChainAssets` writes `lastCrossChainAssetsUpdate = block.timestamp` on every successful update (l. 296).
+
+**Boundary conditions:**
+- `lastCrossChainAssetsUpdate == 0` (never reported) bypasses the gate so vaults that haven't enabled any cross-chain routes can still harvest baseline-only yield (or, more commonly, revert with `NoExtraYield` because there's nothing to harvest).
+- Owner can adjust `crossChainAssetsMaxStaleness` via `setCrossChainAssetsMaxStaleness`. Default 1 hour.
+
+**Tested by:** `MirrorVault.t.sol` — `test_harvestRevertsOnStaleCrossChainReport`, `test_harvestPassesWhenReportFresh`, `test_harvestStalenessSkippedIfNeverReported`, `test_setCrossChainAssetsMaxStaleness`, `test_harvestPassesWhenOwnerWidensStaleness`.
+
+---
+
+## I-18. CCTP recipient required on active route (R-10)
+
+> Every enabled chain config with `cctpDomain != 0` has `cctpRecipient != bytes32(0)`.
+
+**Why:** `cctpDomain == 0` is the "stay local, no CCTP" sentinel; in that case `cctpRecipient` is ignored. But if `cctpDomain != 0` and `cctpRecipient == bytes32(0)`, the first `_splitAndBridge` call would send USDC to address(0) on the destination chain — a black-hole burn that the operator couldn't recover.
+
+**Enforced by:** `MirrorVault.addChain` (l. 412-414) — reverts `CctpRecipientRequired` on the dangerous combination.
+
+**\[runner-gap\]** No on-chain enforcement on `setAllocations` — if an operator zeros a recipient via a different admin path in the future, this invariant could be violated. Today no such path exists; the invariant is composition-safe by the current admin surface.
+
+**Tested by:** `MirrorVault.t.sol` — `test_addChainRevertsOnZeroCctpRecipientWithActiveDomain`, `test_addChainAllowsZeroCctpRecipientWhenDomainIsZero`.
+
+---
+
 ## I-16. Timelocked rotation of trust-root addresses (R-5)
 
 > `treasury` (Vault), `mailbox` (Relayer), and `safe` (Treasury) cannot change without (a) an owner-issued `propose*` call, AND (b) at least `*_TIMELOCK_DELAY` (24h) of wall-clock time, AND (c) the absence of an intervening `cancelPending*` call by the owner.
@@ -274,5 +304,7 @@ These hold by procedure, not code. Auditor should flag if any could be promoted 
 | I-14 Hyperlane fee solvency | partial | inspection — DOS-safe wrap could use explicit test |
 | I-15 updateCrossChainAssets bounded delta (R-1) | ✅ | `MirrorVault.t.sol` — 5 unit tests |
 | I-16 Timelocked trust-root rotation (R-5) | ✅ | Vault/Relayer/Treasury — 7+5+5 unit tests |
+| I-17 harvest requires fresh cross-chain report (R-3) | ✅ | `MirrorVault.t.sol` — 5 unit tests |
+| I-18 CCTP recipient required on active route (R-10) | ✅ | `MirrorVault.t.sol` — 2 unit tests |
 
 Items marked **partial** or **inspection** are the highest-value places to add new invariant fuzz tests during audit prep.

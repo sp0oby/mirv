@@ -127,12 +127,136 @@ contract MirrorVaultTest is TestBase {
         // Warp past harvest interval
         vm.warp(block.timestamp + 1 days + 1);
 
+        // R-3: refresh cross-chain report so it's not stale by the time harvest runs.
+        vm.prank(agent);
+        vault.updateCrossChainAssets(extraYield);
+
         uint256 treasurySharesBefore = vault.balanceOf(address(treasury));
         vm.prank(agent);
         vault.harvest();
 
         uint256 treasurySharesAfter = vault.balanceOf(address(treasury));
         assertGt(treasurySharesAfter, treasurySharesBefore, "treasury should have fee shares");
+    }
+
+    // ─── Harvest staleness gate (R-3) ─────────────────────────────────────────
+
+    function test_harvestRevertsOnStaleCrossChainReport() public {
+        uint256 depositAmt = 1_000_000e6;
+        _approveVault(alice, depositAmt);
+        vm.prank(alice);
+        vault.deposit(depositAmt, alice);
+
+        // Agent reports yield, then goes silent for longer than the staleness window.
+        vm.prank(agent);
+        vault.updateCrossChainAssets(50_000e6);
+
+        // Warp past both the harvest interval AND the staleness window.
+        vm.warp(block.timestamp + 1 days + 1);
+        // staleness window is 1 hour by default; we're well past it.
+
+        vm.expectRevert(MirrorVault.CrossChainAssetsStale.selector);
+        vm.prank(agent);
+        vault.harvest();
+    }
+
+    function test_harvestPassesWhenReportFresh() public {
+        uint256 depositAmt = 1_000_000e6;
+        _approveVault(alice, depositAmt);
+        vm.prank(alice);
+        vault.deposit(depositAmt, alice);
+
+        vm.prank(agent);
+        vault.updateCrossChainAssets(50_000e6);
+
+        // Wait past harvest interval, then refresh just before harvesting.
+        vm.warp(block.timestamp + 1 days + 1);
+        vm.prank(agent);
+        vault.updateCrossChainAssets(50_000e6);
+
+        vm.prank(agent);
+        vault.harvest(); // must succeed
+        assertGt(vault.balanceOf(address(treasury)), 0, "treasury minted fee shares");
+    }
+
+    function test_harvestStalenessSkippedIfNeverReported() public {
+        // Edge case: a vault that has never received a cross-chain report
+        // (e.g. pre-launch, before any chain is enabled) should NOT be blocked
+        // by R-3. The gate only applies once `lastCrossChainAssetsUpdate != 0`.
+        uint256 depositAmt = 1_000e6;
+        _approveVault(alice, depositAmt);
+        vm.prank(alice);
+        vault.deposit(depositAmt, alice);
+
+        vm.warp(block.timestamp + 1 days + 1);
+
+        // No update was ever sent → R-3 skips → harvest reverts with NoExtraYield,
+        // not CrossChainAssetsStale.
+        vm.expectRevert(MirrorVault.NoExtraYield.selector);
+        vm.prank(agent);
+        vault.harvest();
+    }
+
+    function test_setCrossChainAssetsMaxStaleness() public {
+        vm.expectRevert();
+        vm.prank(alice);
+        vault.setCrossChainAssetsMaxStaleness(2 hours);
+
+        vm.prank(owner);
+        vault.setCrossChainAssetsMaxStaleness(2 hours);
+        assertEq(vault.crossChainAssetsMaxStaleness(), 2 hours);
+    }
+
+    function test_harvestPassesWhenOwnerWidensStaleness() public {
+        // Owner widens the gate; harvest then succeeds even after a long quiet period.
+        uint256 depositAmt = 1_000_000e6;
+        _approveVault(alice, depositAmt);
+        vm.prank(alice);
+        vault.deposit(depositAmt, alice);
+
+        vm.prank(agent);
+        vault.updateCrossChainAssets(50_000e6);
+
+        vm.warp(block.timestamp + 1 days + 1); // > 1 hour stale
+
+        vm.prank(owner);
+        vault.setCrossChainAssetsMaxStaleness(2 days);
+
+        vm.prank(agent);
+        vault.harvest(); // staleness now permitted
+        assertGt(vault.balanceOf(address(treasury)), 0);
+    }
+
+    // ─── addChain CCTP recipient check (R-10) ─────────────────────────────────
+
+    function test_addChainRevertsOnZeroCctpRecipientWithActiveDomain() public {
+        // CCTP route requested (cctpDomain != 0) but recipient is bytes32(0) —
+        // would send USDC into a black hole on the first split. Must revert.
+        vm.expectRevert(MirrorVault.CctpRecipientRequired.selector);
+        vm.prank(owner);
+        vault.addChain(
+            11155111, /* hyperlaneDomain */
+            5, /* cctpDomain ≠ 0 means USDC bridging is requested */
+            bytes32(0), /* zero recipient — illegal */
+            address(0),
+            bytes32(0),
+            0
+        );
+    }
+
+    function test_addChainAllowsZeroCctpRecipientWhenDomainIsZero() public {
+        // cctpDomain == 0 means "no CCTP route, keep funds local"; a zero recipient
+        // is then meaningless and acceptable.
+        vm.prank(owner);
+        vault.addChain(
+            11155111,
+            0, /* cctpDomain == 0 */
+            bytes32(0), /* zero recipient OK because no CCTP route */
+            address(0),
+            bytes32(0),
+            0
+        );
+        assertTrue(vault.getChainConfig(11155111).enabled);
     }
 
     // ─── Share price invariant ────────────────────────────────────────────────

@@ -90,6 +90,10 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
     IMailbox public immutable mailbox;
     IPyth public immutable pyth;
     AggregatorV3Interface public immutable chainlinkFeed; // e.g. ETH/USD
+    /// @dev Cached `chainlinkFeed.decimals()` to skip an external call per oracle
+    ///      read (R-12). Chainlink aggregators expose a constant `decimals()`
+    ///      for the lifetime of the proxy, so caching at construction is safe.
+    uint8 public immutable chainlinkFeedDecimals;
 
     bytes32 public immutable pythPriceFeedId; // e.g. ETH/USD feed id on Pyth
 
@@ -153,6 +157,7 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
         mailbox = IMailbox(_mailbox);
         pyth = IPyth(_pyth);
         chainlinkFeed = AggregatorV3Interface(_chainlinkFeed);
+        chainlinkFeedDecimals = AggregatorV3Interface(_chainlinkFeed).decimals();
         pythPriceFeedId = _pythFeedId;
         canonicalPairId = _canonicalPairId;
     }
@@ -460,8 +465,9 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
         if (block.timestamp - updatedAt > CHAINLINK_STALENESS) revert StaleOraclePrice();
         if (answer <= 0) revert StaleOraclePrice();
 
-        uint8 feedDecimals = chainlinkFeed.decimals();
-        return uint256(answer) * 10 ** (18 - feedDecimals);
+        // R-12: use cached `chainlinkFeedDecimals` (set at construction) instead
+        // of an external `decimals()` call per oracle read.
+        return uint256(answer) * 10 ** (18 - chainlinkFeedDecimals);
     }
 
     // ─── Admin ───────────────────────────────────────────────────────────────
