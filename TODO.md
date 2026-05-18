@@ -431,14 +431,9 @@ The mirv agents use a shared **Anthropic** API key + a single shared `AGENT_PRIV
 - [x] Foundry test suite: **85/85 passing** (73 unit + invariant + 12 fork). Re-runs cleanly on every commit via CI.
 - [x] BRIDGE-DESIGN.md documents value-plane architecture (CCTP for USDC, treasury-seeded WETH inventory, async withdrawal, BNB enablement runbook).
 - [x] Freeze contract versions — annotated tag `v1.0.0-rc1` at `7f937e2` pushed to origin 2026-05-18. Contracts byte-identical to v5 hardening (`94fbdaa`); tag note enumerates audit scope, test/Slither/Mythril state, and known open items. Auditors should reference `git checkout v1.0.0-rc1`.
-- [ ] Write `audits/THREAT-MODEL.md` — every actor (user, agent EOA, owner multisig, Hyperlane validator, Circle attester, malicious sister), attack surface, mitigation
-- [ ] Write `audits/SCOPE.md` — files in/out of scope, function-by-function notes. In-scope: MirrorHook, MirrorVault, MirrorFactory, Relayer, Treasury. Out-of-scope: OZ + V4 + Hyperlane + CCTP (dep audits).
-- [ ] Write `audits/INVARIANTS.md` — what must always hold:
-  - `totalAssets() ≥ principalTracked` (after harvest accrual)
-  - `sum(chainConfigs[d].allocationBps for d in enabledDomains) == 10_000`
-  - Hook `canonicalPairId == handle()'s rm.pairId` (defensive check enforces this)
-  - Vault custodial shares + outstanding shares == totalSupply (no shares created outside _mint paths)
-  - `lastDispatchTime` monotonically non-decreasing per pool
+- [x] `audits/THREAT-MODEL.md` (2026-05-18) — 8 actors enumerated (user, agent EOA, owner multisig, Hyperlane, Circle CCTP, oracle, sister hook, V4 PoolManager) + composition risks + 13 numbered recommendations (R-1..R-13) graded high/medium/low for audit triage.
+- [x] `audits/SCOPE.md` (2026-05-18) — in/out scope, function-by-function notes per contract, external-protocol trust roots, severity rubric. Anchored at `v1.0.0-rc1`.
+- [x] `audits/INVARIANTS.md` (2026-05-18) — 14 invariants (I-1..I-14) covering vault solvency, totalAssets decomposition, performance-fee accounting, share-supply consistency, allocation sum, canonical pair identity, cooldown monotonicity, hook permission bits, sister-message auth, ETH custody, CCTP approval residue, no infinite approvals, CEI, dispatch fee solvency. Each entry: statement, enforcement site, Foundry test coverage. Items marked **\[runner-gap\]** are highest-value places to add fuzz tests during audit prep.
 - [ ] `aeon-vuln-scanner` pass (Bankr skill) — needs Bankr account.
 - [ ] Investigate `withdrawEth` revert on Base Sepolia (carried from Phase 5) — must understand the failure mode before mainnet.
 - [ ] Set up internal Cantina/Zellic preference (decision deferred per memory)
