@@ -1,6 +1,6 @@
 # mirv — Threat Model
 
-**Tag:** `v1.0.0-rc3` (R-1, R-2, R-3, R-5, R-10, R-12 landed; see status table for R-1..R-13 disposition).
+**Tag:** `v1.0.0-rc4` (R-1, R-2, R-3, R-5, R-7, R-10, R-11, R-12, R-13 landed; R-4, R-6, R-9 documented in `audits/OPERATIONS.md`; only R-8 remains open by deliberate choice).
 
 This document enumerates the actors that can interact with the in-scope contracts (`audits/SCOPE.md`), their attack surfaces, and the mitigations in place. Severity uses the rubric in `SCOPE.md`.
 
@@ -257,16 +257,16 @@ The one interaction worth noting:
 | R-1  | Bound `updateCrossChainAssets` delta                       | **LANDED**  | `maxCrossChainAssetsDeltaBps` default 2500 (25%). Owner-tunable. First non-zero set bypasses the gate so deploy-time bootstrapping is unconstrained. |
 | R-2  | Emit prior-value in `CrossChainAssetsUpdated`              | **LANDED**  | Event signature now `(uint256 oldValue, uint256 newValue)`.                                |
 | R-3  | Gate `harvest` on freshness of `crossChainAssetsReported`  | **LANDED**  | `lastCrossChainAssetsUpdate` written on every update; `harvest()` reverts `CrossChainAssetsStale` if older than `crossChainAssetsMaxStaleness` (default 1 hour, owner-tunable). Skipped when no update has ever happened (pre-launch vaults). |
-| R-4  | Agent key rotation policy                                  | open / ops  | Runbook item, not on-chain.                                                                 |
+| R-4  | Agent key rotation policy                                  | **DOCUMENTED** | `audits/OPERATIONS.md §2` — 90-day default cadence + 5 immediate-rotation triggers + step-by-step procedure. |
 | R-5  | Timelock on `setTreasury` / `setMailbox` / `setSafe`       | **LANDED**  | `propose`/`execute`/`cancel` triplet on each. 24h delay. Anyone may execute after delay; only owner may propose / cancel. |
-| R-6  | Document multisig signing policy                           | open / ops  | Mainnet runbook item.                                                                       |
-| R-7  | Separate guardian role for pause-only                      | open        | Audit-decision; default Ownable kept for simplicity.                                       |
-| R-8  | Make `Relayer.mailbox` immutable                           | mitigated   | R-5 timelock closes the immediate-flip risk; immutability still cleaner but not blocking. |
-| R-9  | Document `setAuthorizedSender` admin sequence              | open / ops  |                                                                                             |
+| R-6  | Document multisig signing policy                           | **DOCUMENTED** | `audits/OPERATIONS.md §3` — quorum, signer roles, proposal-hygiene checklist, rotation procedure, compromise response. |
+| R-7  | Separate guardian role for pause-only                      | **LANDED**  | `MirrorVault.guardian` + `MirrorHook.guardian` (owner-set). Guardian can `pause()`; only owner can `unpause()`. Closes the "slow multisig vs fast attacker" gap. |
+| R-8  | Make `Relayer.mailbox` immutable                           | **DEFERRED** | R-5 timelock already closes the immediate-flip risk. Immutability would block legitimate mailbox upgrades by Hyperlane; deliberately kept mutable behind the 24h timelock. |
+| R-9  | Document `setAuthorizedSender` admin sequence              | **DOCUMENTED** | `audits/OPERATIONS.md §4` — add-sister / remove-sister procedures + the bytes32-left-pad gotcha. |
 | R-10 | `cctpRecipient != 0` check in `addChain`                   | **LANDED**  | `addChain` reverts `CctpRecipientRequired` when `cctpDomain != 0` but `cctpRecipient == bytes32(0)`. Zero recipient still allowed when `cctpDomain == 0` (the "stay local" pattern). |
-| R-11 | Cross-oracle sanity check (Pyth vs Chainlink deviation)    | open        | Audit-decision; current fallback semantics may be sufficient.                              |
+| R-11 | Cross-oracle sanity check (Pyth vs Chainlink deviation)    | **LANDED**  | `_getOraclePrice` refactored into `_tryPythPrice` + `_tryChainlinkPrice` + cross-check at `oracleDeviationToleranceBps` (default 500 BPS = 5%). Owner-tunable; zero disables. Costs one extra external Chainlink read per oracle invocation in the common Pyth-success case. |
 | R-12 | Cache `chainlinkFeed.decimals()` in constructor            | **LANDED**  | New `chainlinkFeedDecimals` immutable set in `MirrorHook` constructor. Saves one external call per `_getOraclePrice()` invocation. Asserted equal to the live feed value on Base mainnet fork (`test_chainlinkFeedDecimalsCached`). |
-| R-13 | Cap sister-reported `currentDepth` value                   | open        | Audit-decision; current bound is on the consumer side (cooldown + threshold).               |
+| R-13 | Cap sister-reported `currentDepth` value                   | **LANDED**  | `MirrorHook.handle` caps the stored sister depth at `maxSisterDepthMultiple × prior` (default 10×). Emits `SisterDepthCapped(origin, reported, capped)` when the cap fires so monitoring can correlate with sister compromise. Bootstrap case (prior==0) accepts as-is so first reports aren't blocked. |
 
 ### Known open items (carried forward)
 - `Relayer._liquidityFromDeltas` is a placeholder; production should use TickMath + LiquidityAmounts (SCOPE.md note).

@@ -407,6 +407,126 @@ contract HookCallbackTest is Test {
         assertTrue(foundDispatch, "RebalanceDispatched must fire from afterAddLiquidity path");
     }
 
+    // ─── Guardian pause role (R-7) ────────────────────────────────────────────
+
+    function test_guardianCanPauseHook() public {
+        address fastResponder = makeAddr("fastResponder");
+        vm.prank(owner);
+        hook.setGuardian(fastResponder);
+
+        vm.prank(fastResponder);
+        hook.pause();
+        assertTrue(hook.paused());
+
+        // Guardian cannot unpause.
+        vm.expectRevert();
+        vm.prank(fastResponder);
+        hook.unpause();
+
+        vm.prank(owner);
+        hook.unpause();
+        assertFalse(hook.paused());
+    }
+
+    function test_hookPauseRevertsWhenNotOwnerOrGuardian() public {
+        vm.expectRevert(MirrorHook.NotGuardianOrOwner.selector);
+        vm.prank(alice);
+        hook.pause();
+    }
+
+    // ─── Oracle deviation cross-check (R-11) ──────────────────────────────────
+    /// @dev On the live Base mainnet fork, Pyth and Chainlink ETH/USD should
+    ///      report within tolerance — this asserts the cross-check doesn't
+    ///      false-positive in normal market conditions. (If it ever does, that
+    ///      means the feeds genuinely diverged on the fork block — pick a
+    ///      different fork-block or widen tolerance for test.)
+    function test_oracleDeviationCheckPassesOnLiveFeeds() public {
+        // Provoke a depth-event so `_getOraclePrice` (via `_eventUsdValue`) fires
+        // — this is the path that R-11 protects. We're not asserting price here;
+        // just that the dispatch doesn't revert OracleDeviationTooLarge.
+        vm.prank(owner);
+        hook.setAgentAuthorization(agent, true);
+
+        vm.deal(address(hook), 1 ether); // dispatch fee budget
+
+        vm.prank(agent);
+        hook.dispatchRebalance(1e18, 1e6, 3000, -60, 60);
+        // If we reach here without revert, the cross-check accepted live feed
+        // values within the default 500 BPS tolerance.
+    }
+
+    function test_oracleDeviationTolZeroDisablesCrossCheck() public {
+        // Owner can disable the cross-check by setting tolerance to 0.
+        vm.prank(owner);
+        hook.setOracleDeviationToleranceBps(0);
+        assertEq(hook.oracleDeviationToleranceBps(), 0);
+    }
+
+    function test_setOracleDeviationToleranceBoundedAndOwnerOnly() public {
+        vm.expectRevert();
+        vm.prank(alice);
+        hook.setOracleDeviationToleranceBps(500);
+
+        vm.expectRevert(MirrorHook.InvalidThreshold.selector);
+        vm.prank(owner);
+        hook.setOracleDeviationToleranceBps(10_001);
+
+        vm.prank(owner);
+        hook.setOracleDeviationToleranceBps(250);
+        assertEq(hook.oracleDeviationToleranceBps(), 250);
+    }
+
+    // ─── Sister-depth cap (R-13) ──────────────────────────────────────────────
+    function test_handleCapsRunawaySisterDepth() public {
+        uint32 sisterDomain = 1;
+        bytes32 sisterSender = bytes32(uint256(uint160(makeAddr("sisterHook"))));
+        vm.prank(owner);
+        hook.setAuthorizedSender(sisterSender, true);
+        vm.prank(owner);
+        hook.addSisterDomain(sisterDomain, sisterSender);
+
+        // First report establishes a baseline depth — no cap applied (priorLocal==0).
+        MirrorHook.RebalanceMessage memory rm = MirrorHook.RebalanceMessage({
+            pairId: hook.canonicalPairId(),
+            deltaToken0: 0, deltaToken1: 0,
+            newFee: 3000, tickLower: 0, tickUpper: 0,
+            minExpectedYield: 0,
+            currentDepth: 1_000_000 // baseline
+        });
+        vm.prank(HYPERLANE_MAILBOX);
+        hook.handle(sisterDomain, sisterSender, abi.encode(rm));
+        assertEq(hook.sisterDepths(sisterDomain, hook.canonicalPairId()), 1_000_000);
+
+        // Second report claims absurdly large depth — should be capped at
+        // priorLocal * maxSisterDepthMultiple = 1_000_000 * 10 = 10_000_000.
+        rm.currentDepth = 1_000_000_000_000; // 1000× the baseline
+        vm.recordLogs();
+        vm.prank(HYPERLANE_MAILBOX);
+        hook.handle(sisterDomain, sisterSender, abi.encode(rm));
+
+        uint256 stored = hook.sisterDepths(sisterDomain, hook.canonicalPairId());
+        assertEq(stored, 10_000_000, "depth must be capped at 10x prior");
+
+        // SisterDepthCapped event must fire with reported + capped values.
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bool found;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == keccak256("SisterDepthCapped(uint32,uint256,uint256)")) {
+                found = true;
+                (uint256 reported, uint256 capped) = abi.decode(logs[i].data, (uint256, uint256));
+                assertEq(reported, 1_000_000_000_000);
+                assertEq(capped, 10_000_000);
+            }
+        }
+        assertTrue(found, "SisterDepthCapped must fire when cap activates");
+    }
+
+    function test_setMaxSisterDepthMultipleZeroDisablesCap() public {
+        vm.prank(owner);
+        hook.setMaxSisterDepthMultiple(0);
+        assertEq(hook.maxSisterDepthMultiple(), 0);
+    }
+
     // ─── chainlinkFeedDecimals caching (R-12) ─────────────────────────────────
     /// @dev Locks in that the constructor caches the Chainlink aggregator's
     ///      decimals so each oracle read can skip the external call. Asserts

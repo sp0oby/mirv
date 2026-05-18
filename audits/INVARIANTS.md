@@ -1,6 +1,6 @@
 # mirv — Invariants
 
-**Tag:** `v1.0.0-rc3` (R-1, R-2, R-3, R-5, R-10, R-12 landed; see I-15..I-18 below).
+**Tag:** `v1.0.0-rc4` (R-1, R-2, R-3, R-5, R-7, R-10, R-11, R-12, R-13 landed; see I-15..I-21 below).
 
 Properties that must hold across every reachable post-transaction state. Each entry: the invariant statement, where it's enforced, why a violation matters, and how it's tested today.
 
@@ -252,6 +252,51 @@ The Foundry invariant suite (`test/invariant/VaultInvariants.t.sol`) covers the 
 
 ---
 
+## I-19. Pause authorization (R-7)
+
+> `MirrorVault.pause()` and `MirrorHook.pause()` succeed only if `msg.sender == owner() || msg.sender == guardian`. `unpause()` is strictly owner-only.
+
+**Why:** Pause needs to happen in minutes; multisig coordination is hours. Separating the credentials lets a hot-standby guardian halt the bleeding, while keeping the harder action (resume operations) behind the full multisig.
+
+**Enforced by:**
+- `MirrorVault.pause` (l. 580-583), `unpause` (l. 587-589)
+- `MirrorHook.pause` (l. 567-570), `unpause` (l. 572-574)
+- `setGuardian` is `onlyOwner` on both.
+
+**Tested by:**
+- `MirrorVault.t.sol` — `test_setGuardianOwnerOnly`, `test_guardianCanPauseButNotUnpause`, `test_pauseRevertsWhenNeitherOwnerNorGuardian`, `test_ownerCanStillPauseWithGuardianUnset`.
+- `HookCallback.t.sol` — `test_guardianCanPauseHook`, `test_hookPauseRevertsWhenNotOwnerOrGuardian`.
+
+---
+
+## I-20. Oracle deviation cross-check (R-11)
+
+> When `_tryPythPrice` and `_tryChainlinkPrice` both return `ok=true` and `oracleDeviationToleranceBps != 0`, the absolute difference between the two prices is at most `oracleDeviationToleranceBps / MAX_BPS × min(pyth, chainlink)`. Otherwise `_getOraclePrice` reverts `OracleDeviationTooLarge`.
+
+**Why:** Single-feed manipulation (Pyth confidence interval gamed, or stale Chainlink slot) becomes a no-op if the OTHER feed disagrees. Bounds the price input that drives `_eventUsdValue` → imbalance signals → cross-chain dispatch.
+
+**Enforced by:** `MirrorHook._getOraclePrice` (l. 458-473). The cross-check is owner-tunable via `setOracleDeviationToleranceBps`; zero disables (audit / volatility override).
+
+**Cost:** one extra external Chainlink read per oracle invocation. The hot path (V4 callbacks → `_eventUsdValue` → `_getOraclePrice`) pays this on every swap/LP event. Acceptable for the safety it buys; tunable down to zero if mainnet gas pressure makes it too expensive.
+
+**Tested by:** `HookCallback.t.sol` — `test_oracleDeviationCheckPassesOnLiveFeeds` (sanity check that Pyth + Chainlink ETH/USD on Base mainnet agree within 5%), `test_oracleDeviationTolZeroDisablesCrossCheck`, `test_setOracleDeviationToleranceBoundedAndOwnerOnly`.
+
+---
+
+## I-21. Sister-depth cap on inbound `handle()` (R-13)
+
+> When `handle()` accepts a sister-reported `currentDepth > 0` and a non-zero prior sister depth exists in `sisterDepths[origin][canonicalPairId]`, the value stored is at most `maxSisterDepthMultiple × prior`. Reports exceeding the cap are silently truncated and a `SisterDepthCapped(origin, reported, capped)` event fires.
+
+**Why:** A compromised sister hook can otherwise inject an astronomical `currentDepth` that makes `_imbalanceExceeded` fire on every subsequent local LP event. The cap bounds the noise contribution from a single compromised peer to a heuristic multiple of recent legitimate activity.
+
+**Enforced by:** `MirrorHook.handle` (l. 297-318). Bootstrap case (prior == 0) accepts the report as-is so first reports aren't blocked. `maxSisterDepthMultiple == 0` disables the cap.
+
+**Trade-off:** legitimate large cross-chain imbalances (e.g. a real $10M liquidity event on a sister chain when local depth is $1M) get truncated to 10× and emit `SisterDepthCapped`. Operators see the event and can decide whether to raise the cap or treat as a real anomaly. The cap value is an audit-tunable.
+
+**Tested by:** `HookCallback.t.sol` — `test_handleCapsRunawaySisterDepth` (verifies 1000× report → capped at 10× + event), `test_setMaxSisterDepthMultipleZeroDisablesCap`.
+
+---
+
 ## I-16. Timelocked rotation of trust-root addresses (R-5)
 
 > `treasury` (Vault), `mailbox` (Relayer), and `safe` (Treasury) cannot change without (a) an owner-issued `propose*` call, AND (b) at least `*_TIMELOCK_DELAY` (24h) of wall-clock time, AND (c) the absence of an intervening `cancelPending*` call by the owner.
@@ -306,5 +351,8 @@ These hold by procedure, not code. Auditor should flag if any could be promoted 
 | I-16 Timelocked trust-root rotation (R-5) | ✅ | Vault/Relayer/Treasury — 7+5+5 unit tests |
 | I-17 harvest requires fresh cross-chain report (R-3) | ✅ | `MirrorVault.t.sol` — 5 unit tests |
 | I-18 CCTP recipient required on active route (R-10) | ✅ | `MirrorVault.t.sol` — 2 unit tests |
+| I-19 Pause authorization (R-7) | ✅ | Vault — 4 unit; Hook — 2 fork tests |
+| I-20 Oracle deviation cross-check (R-11) | ✅ | Hook — 3 fork tests |
+| I-21 Sister-depth cap on inbound handle (R-13) | ✅ | Hook — 2 fork tests |
 
 Items marked **partial** or **inspection** are the highest-value places to add new invariant fuzz tests during audit prep.

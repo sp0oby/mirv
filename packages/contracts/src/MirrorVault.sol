@@ -73,6 +73,7 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     error CctpRecipientRequired();
     error TimelockNotReady();
     error NoPendingTreasury();
+    error NotGuardianOrOwner();
 
     // ─── Events ─────────────────────────────────────────────────────────────
     event PerformanceFeePaid(uint256 extraYield, uint256 feeShares, address indexed treasury);
@@ -81,6 +82,7 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     event CrossChainAssetsUpdated(uint256 oldValue, uint256 newValue);
     event MaxCrossChainAssetsDeltaUpdated(uint256 oldBps, uint256 newBps);
     event CrossChainAssetsMaxStalenessUpdated(uint256 oldSeconds, uint256 newSeconds);
+    event GuardianUpdated(address indexed oldGuardian, address indexed newGuardian);
     event BaselineApyUpdated(uint256 newApyBps);
     event AgentAuthorizationUpdated(address indexed agent, bool authorized);
     event TreasuryProposed(address indexed newTreasury, uint256 effectiveAt);
@@ -182,6 +184,13 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     address public pendingTreasury;
     /// @notice Earliest timestamp at which `executeTreasury` may consume the proposal.
     uint256 public pendingTreasuryEffectiveAt;
+
+    /// @notice Fast-response pause role (R-7). Can call `pause()` (and ONLY pause)
+    ///         without going through the owner multisig. Used to halt the vault
+    ///         in minutes when monitoring detects an anomaly, while the multisig
+    ///         coordinates a more thorough response. Zero means "no guardian
+    ///         configured" — only the owner can pause.
+    address public guardian;
 
     /// @notice Baseline single-chain APY in BPS (e.g. 800 = 8%).
     uint256 public baselineApyBps;
@@ -628,10 +637,21 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
         emit AgentAuthorizationUpdated(agent, authorized);
     }
 
-    function pause() external onlyOwner {
+    /// @notice Owner-set fast-response pause role (R-7). Set to address(0) to
+    ///         clear. Unpause remains owner-only — guardian can stop the bleeding
+    ///         but cannot decide when it's safe to resume.
+    function setGuardian(address newGuardian) external onlyOwner {
+        emit GuardianUpdated(guardian, newGuardian);
+        guardian = newGuardian;
+    }
+
+    /// @notice Pause the vault. Callable by owner OR the configured guardian.
+    function pause() external {
+        if (msg.sender != owner() && msg.sender != guardian) revert NotGuardianOrOwner();
         _pause();
     }
 
+    /// @notice Unpause. Owner-only — guardian's role ends once the alarm fires.
     function unpause() external onlyOwner {
         _unpause();
     }

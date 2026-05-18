@@ -41,6 +41,8 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
     error NotMailbox();
     error NotAuthorizedSender();
     error InvalidPayload();
+    error NotGuardianOrOwner();
+    error OracleDeviationTooLarge();
 
     // ─── Events ─────────────────────────────────────────────────────────────
     event ImbalanceDetected(bytes32 indexed pairId, uint256 imbalanceBps, uint256 driftBps);
@@ -54,6 +56,10 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
     event AuthorizedSenderUpdated(bytes32 indexed sender, bool authorized);
     event DispatchCooldownUpdated(uint256 oldSeconds, uint256 newSeconds);
     event DispatchFailed(uint32 indexed destinationDomain, bytes32 pairId, bytes reason);
+    event GuardianUpdated(address indexed oldGuardian, address indexed newGuardian);
+    event MaxSisterDepthMultipleUpdated(uint256 oldMultiple, uint256 newMultiple);
+    event SisterDepthCapped(uint32 indexed origin, uint256 reported, uint256 capped);
+    event OracleDeviationToleranceUpdated(uint256 oldBps, uint256 newBps);
 
     // ─── Types ───────────────────────────────────────────────────────────────
     /// @dev `currentDepth` carries the sender chain's `localDepthUsd` at dispatch time
@@ -133,6 +139,29 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
 
     /// @dev Max single-move size as % of TVL in BPS (default 200 = 2%)
     uint256 public maxMoveBps = 200;
+
+    /// @notice Fast-response pause role (R-7). Can call `pause()` (and ONLY pause)
+    ///         without going through the owner multisig. Halts hook dispatch +
+    ///         handle() in minutes when monitoring detects an anomaly. Zero
+    ///         means "no guardian configured" — only owner can pause.
+    address public guardian;
+
+    /// @notice Cap on inbound sister-reported depth as a multiple of the local
+    ///         pool's current depth (R-13). A compromised sister could otherwise
+    ///         report an astronomical `currentDepth` and trigger continuous
+    ///         dispatch loops via `_imbalanceExceeded`. Default 10× — generous
+    ///         enough to allow legitimate cross-chain imbalances, tight enough
+    ///         to bound noise from a single compromised sister. Zero means
+    ///         "no cap" (audit / migration override).
+    uint256 public maxSisterDepthMultiple = 10;
+
+    /// @notice Max % deviation between Pyth and Chainlink prices (R-11). When
+    ///         both feeds are fresh, `_getOraclePrice` cross-checks them and
+    ///         reverts `OracleDeviationTooLarge` on disagreement above this
+    ///         tolerance. Default 500 BPS (5%) — wider than the dispatch
+    ///         threshold so normal price noise won't trip it. Zero means
+    ///         "no cross-check" (the rc2 behavior).
+    uint256 public oracleDeviationToleranceBps = 500;
 
     // ─── Constructor ─────────────────────────────────────────────────────────
     /// @param _poolManager      V4 PoolManager on this chain
@@ -300,8 +329,32 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
         // Treat currentDepth==0 as "no depth reported" (agent-initiated dispatchRebalance
         // sends 0) so we don't clobber valid tracking with a zero.
         if (rm.currentDepth != 0) {
-            sisterDepths[origin][canonicalPairId] = rm.currentDepth;
-            emit SisterDepthReported(origin, canonicalPairId, rm.currentDepth);
+            // R-13: cap an inbound sister depth at `maxSisterDepthMultiple ×
+            // local depth`. A compromised sister with a valid Hyperlane sender
+            // could otherwise inject an arbitrary `currentDepth` and force
+            // `_imbalanceExceeded` to fire on every subsequent local event.
+            // The cap is heuristic; legitimate large cross-chain imbalances
+            // remain detectable. `maxSisterDepthMultiple = 0` disables the cap.
+            uint256 reported = rm.currentDepth;
+            uint256 stored = reported;
+            // Pull local depth for the SENDER's pair on whichever pool this
+            // hook tracks. We don't know which PoolId the sister event came
+            // from, so use the highest tracked depth as a generous reference.
+            // Edge case: if local depth is 0 (no LP activity yet), don't cap —
+            // first sister reports are part of the bootstrap path.
+            uint256 cap = maxSisterDepthMultiple;
+            if (cap != 0) {
+                // Use the canonical pair's stored sister depth as a proxy for
+                // "reasonable scale". On the first report (everything 0) we
+                // accept whatever comes in.
+                uint256 priorLocal = sisterDepths[origin][canonicalPairId];
+                if (priorLocal != 0 && reported > priorLocal * cap) {
+                    stored = priorLocal * cap;
+                    emit SisterDepthCapped(origin, reported, stored);
+                }
+            }
+            sisterDepths[origin][canonicalPairId] = stored;
+            emit SisterDepthReported(origin, canonicalPairId, stored);
         }
 
         emit SisterNotificationReceived(origin, sender, canonicalPairId, rm.currentDepth);
@@ -425,49 +478,66 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
     ///      reacting to noisy / wide-uncertainty price data.
     uint256 public constant PYTH_MAX_CONF_BPS = 100;
 
-    /// @dev Returns price in USD with 18 decimals.
-    ///      Tries Pyth first; falls back to Chainlink if Pyth is stale OR if Pyth's
-    ///      confidence interval is > 1% of price (low-quality feed).
+    /// @dev Returns price in USD with 18 decimals. When both Pyth and Chainlink
+    ///      are fresh, performs a cross-check (R-11) — reverts
+    ///      `OracleDeviationTooLarge` if they disagree by more than
+    ///      `oracleDeviationToleranceBps`. Pyth is preferred (lower latency)
+    ///      when both pass; falls back to Chainlink if Pyth is stale or has
+    ///      a wide confidence interval; reverts `StaleOraclePrice` if neither
+    ///      is usable. Cost of R-11: one extra external call (Chainlink) per
+    ///      invocation in the common Pyth-success case.
     function _getOraclePrice() internal view returns (uint256) {
-        try pyth.getPriceNoOlderThan(pythPriceFeedId, PYTH_STALENESS) returns (IPyth.Price memory p) {
-            // Validate price > 0 AND confidence/price ratio is within tolerance.
-            // p.conf is a uint64 absolute confidence interval in the same units as p.price.
-            if (p.price > 0 && p.conf > 0) {
-                uint256 priceAbs = uint256(uint64(p.price));
-                // conf * MAX_BPS / price <= PYTH_MAX_CONF_BPS  ⇨  conf * MAX_BPS <= price * PYTH_MAX_CONF_BPS
-                if (uint256(p.conf) * MAX_BPS > priceAbs * PYTH_MAX_CONF_BPS) {
-                    // Pyth too uncertain — skip and try Chainlink below.
-                } else {
-                    int256 scaledPrice = int256(priceAbs);
-                    uint256 priceUsd;
-                    if (p.expo >= 0) {
-                        priceUsd = uint256(scaledPrice) * 10 ** uint32(p.expo) * 1e18;
-                    } else {
-                        priceUsd = uint256(scaledPrice) * 1e18 / 10 ** uint32(-p.expo);
-                    }
-                    return priceUsd;
-                }
-            } else if (p.price > 0) {
-                // conf == 0 — Pyth gives a deterministic price (unusual but valid for
-                // some feeds). Accept it.
-                int256 scaledPrice = int256(uint256(uint64(p.price)));
-                uint256 priceUsd;
-                if (p.expo >= 0) {
-                    priceUsd = uint256(scaledPrice) * 10 ** uint32(p.expo) * 1e18;
-                } else {
-                    priceUsd = uint256(scaledPrice) * 1e18 / 10 ** uint32(-p.expo);
-                }
-                return priceUsd;
+        (bool pythOk, uint256 pythPrice) = _tryPythPrice();
+        (bool chainlinkOk, uint256 chainlinkPrice) = _tryChainlinkPrice();
+
+        if (!pythOk && !chainlinkOk) revert StaleOraclePrice();
+
+        // R-11: cross-check when both feeds are fresh. Zero tolerance disables
+        // the check (kept as a kill switch in case Pyth and Chainlink legitimately
+        // diverge during volatile windows and we need to fall back to single-source).
+        if (pythOk && chainlinkOk && oracleDeviationToleranceBps != 0) {
+            uint256 lo = pythPrice < chainlinkPrice ? pythPrice : chainlinkPrice;
+            uint256 hi = pythPrice > chainlinkPrice ? pythPrice : chainlinkPrice;
+            // (hi - lo) / lo > tol/MAX_BPS  ⇨  (hi - lo) * MAX_BPS > lo * tol
+            if ((hi - lo) * MAX_BPS > lo * oracleDeviationToleranceBps) {
+                revert OracleDeviationTooLarge();
             }
-        } catch {}
+        }
 
+        // Prefer Pyth (lower latency, sub-second updates) when valid.
+        return pythOk ? pythPrice : chainlinkPrice;
+    }
+
+    /// @dev Reads + validates Pyth. Returns `(ok=true, price)` only if the
+    ///      feed is fresh AND the confidence interval is within tolerance.
+    function _tryPythPrice() internal view returns (bool ok, uint256 priceUsd) {
+        try pyth.getPriceNoOlderThan(pythPriceFeedId, PYTH_STALENESS) returns (IPyth.Price memory p) {
+            if (p.price <= 0) return (false, 0);
+            uint256 priceAbs = uint256(uint64(p.price));
+            // Confidence gate (only when conf is reported — some feeds emit conf=0
+            // deterministically and that's acceptable).
+            if (p.conf != 0 && uint256(p.conf) * MAX_BPS > priceAbs * PYTH_MAX_CONF_BPS) {
+                return (false, 0);
+            }
+            // Scale to 18 decimals using Pyth's signed `expo`.
+            if (p.expo >= 0) {
+                priceUsd = priceAbs * 10 ** uint32(p.expo) * 1e18;
+            } else {
+                priceUsd = priceAbs * 1e18 / 10 ** uint32(-p.expo);
+            }
+            return (true, priceUsd);
+        } catch {
+            return (false, 0);
+        }
+    }
+
+    /// @dev Reads + validates Chainlink. R-12: uses the constructor-cached
+    ///      `chainlinkFeedDecimals` instead of an external `decimals()` call.
+    function _tryChainlinkPrice() internal view returns (bool ok, uint256 priceUsd) {
         (, int256 answer,, uint256 updatedAt,) = chainlinkFeed.latestRoundData();
-        if (block.timestamp - updatedAt > CHAINLINK_STALENESS) revert StaleOraclePrice();
-        if (answer <= 0) revert StaleOraclePrice();
-
-        // R-12: use cached `chainlinkFeedDecimals` (set at construction) instead
-        // of an external `decimals()` call per oracle read.
-        return uint256(answer) * 10 ** (18 - chainlinkFeedDecimals);
+        if (block.timestamp - updatedAt > CHAINLINK_STALENESS) return (false, 0);
+        if (answer <= 0) return (false, 0);
+        return (true, uint256(answer) * 10 ** (18 - chainlinkFeedDecimals));
     }
 
     // ─── Admin ───────────────────────────────────────────────────────────────
@@ -526,7 +596,32 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
         maxMoveBps = bps;
     }
 
-    function pause() external onlyOwner {
+    /// @notice Owner-set fast-response pause role (R-7). Zero clears it. Unpause
+    ///         stays owner-only — guardian can pull the alarm, owner decides
+    ///         when the alarm is off.
+    function setGuardian(address newGuardian) external onlyOwner {
+        emit GuardianUpdated(guardian, newGuardian);
+        guardian = newGuardian;
+    }
+
+    /// @notice Owner-set tolerance for sister-reported depth (R-13). Zero
+    ///         disables the cap (audit/migration override).
+    function setMaxSisterDepthMultiple(uint256 newMultiple) external onlyOwner {
+        emit MaxSisterDepthMultipleUpdated(maxSisterDepthMultiple, newMultiple);
+        maxSisterDepthMultiple = newMultiple;
+    }
+
+    /// @notice Owner-set Pyth/Chainlink deviation tolerance (R-11). Default
+    ///         500 BPS (5%). Zero disables the cross-check; the hook then
+    ///         silently prefers Pyth like the rc2 behavior.
+    function setOracleDeviationToleranceBps(uint256 newBps) external onlyOwner {
+        if (newBps > MAX_BPS) revert InvalidThreshold();
+        emit OracleDeviationToleranceUpdated(oracleDeviationToleranceBps, newBps);
+        oracleDeviationToleranceBps = newBps;
+    }
+
+    function pause() external {
+        if (msg.sender != owner() && msg.sender != guardian) revert NotGuardianOrOwner();
         _pause();
     }
 

@@ -259,6 +259,54 @@ contract MirrorVaultTest is TestBase {
         assertTrue(vault.getChainConfig(11155111).enabled);
     }
 
+    // ─── Guardian pause role (R-7) ────────────────────────────────────────────
+
+    function test_setGuardianOwnerOnly() public {
+        address fastResponder = makeAddr("fastResponder");
+        vm.expectRevert();
+        vm.prank(alice);
+        vault.setGuardian(fastResponder);
+
+        vm.prank(owner);
+        vault.setGuardian(fastResponder);
+        assertEq(vault.guardian(), fastResponder);
+    }
+
+    function test_guardianCanPauseButNotUnpause() public {
+        address fastResponder = makeAddr("fastResponder");
+        vm.prank(owner);
+        vault.setGuardian(fastResponder);
+
+        // Guardian pauses.
+        vm.prank(fastResponder);
+        vault.pause();
+        assertTrue(vault.paused());
+
+        // Guardian cannot unpause (unpause stays owner-only).
+        vm.expectRevert();
+        vm.prank(fastResponder);
+        vault.unpause();
+
+        // Owner can unpause.
+        vm.prank(owner);
+        vault.unpause();
+        assertFalse(vault.paused());
+    }
+
+    function test_pauseRevertsWhenNeitherOwnerNorGuardian() public {
+        // No guardian configured; alice has neither role.
+        vm.expectRevert(MirrorVault.NotGuardianOrOwner.selector);
+        vm.prank(alice);
+        vault.pause();
+    }
+
+    function test_ownerCanStillPauseWithGuardianUnset() public {
+        // guardian == address(0), owner pauses anyway — pre-R-7 behavior preserved.
+        vm.prank(owner);
+        vault.pause();
+        assertTrue(vault.paused());
+    }
+
     // ─── Share price invariant ────────────────────────────────────────────────
 
     /// @dev After a deposit, share price should be >= 1 (no deflation)
