@@ -1,3 +1,8 @@
+export const metadata = {
+  title: "analytics",
+  description: "the rules that govern the mirror, the safety set, and recent milestones.",
+};
+
 const PARAMS = [
   { label: "performance fee",       value: "15%",       note: "taken only from extra yield earned" },
   { label: "earnings collected",    value: "once a day", note: "rolled into share price" },

@@ -4,6 +4,11 @@ import { readDashboardState, readRecentActivity, formatUsdc, timeAgo, shortTx, A
 
 export const revalidate = 30;
 
+export const metadata = {
+  title: "dashboard",
+  description: "live state of the mirv vault — total mirrored, share price, per-chain allocation, agent activity. refreshes every 30s.",
+};
+
 export default async function DashboardPage() {
   let state: Awaited<ReturnType<typeof readDashboardState>> | null = null;
   let activity: Awaited<ReturnType<typeof readRecentActivity>> = [];

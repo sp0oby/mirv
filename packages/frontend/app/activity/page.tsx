@@ -2,6 +2,11 @@ import { readRecentActivity, shortTx, type ActivityEvent } from "@/lib/contracts
 
 export const revalidate = 30;
 
+export const metadata = {
+  title: "activity",
+  description: "live cross-chain event feed — rebalances dispatched, deliveries, depth updates. last hour, refreshing every 30s.",
+};
+
 const KIND_COLORS: Record<ActivityEvent["kind"], string> = {
   dispatch: "#ef48aa",
   execute:  "#aaf0d1",

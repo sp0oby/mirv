@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="6" fill="#fff8e7"/>
+  <text x="16" y="23" text-anchor="middle"
+        font-family="ui-rounded, 'Hiragino Maru Gothic ProN', system-ui, sans-serif"
+        font-size="22" font-weight="700" fill="#ef48aa">m</text>
+  <circle cx="24" cy="9" r="2.5" fill="#ef48aa"/>
+</svg>
