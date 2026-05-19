@@ -1,13 +1,16 @@
 import Link from "next/link";
 import { Mascot } from "@/components/Mascot";
+import { readDashboardState, formatUsdc, timeAgo } from "@/lib/contracts";
 
-// Landing v2 — tighter, bigger, less explanatory. The original draft tried
-// to explain the whole protocol on the splash; this one lets the design
-// carry the personality and reserves the long-form explanation for /about.
-// Hero is the dominant block (68vh+), three-card explainer is small and
-// quiet, no "what mirv is NOT" wall.
+export const revalidate = 30;
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  let state: Awaited<ReturnType<typeof readDashboardState>> | null = null;
+  try { state = await readDashboardState(); } catch { /* fall back to dashes */ }
+
+  const tvlUsd = state ? Number(formatUsdc(state.totalAssets).replace(/,/g, "")) : null;
+  const cycleAgo = state && state.lastUpdate > 0n ? timeAgo(state.lastUpdate) : null;
+
   return (
     <div className="pt-4">
       {/* ─── Hero ──────────────────────────────────────────────────────── */}
@@ -74,7 +77,9 @@ export default function LandingPage() {
           <p className="font-maru text-[13px] text-ink-faint uppercase tracking-wider mb-1">
             ✿ total mirrored
           </p>
-          <p className="pixel text-[40px] text-ink leading-tight">$8,256</p>
+          <p className="pixel text-[40px] text-ink leading-tight">
+            {tvlUsd === null ? "—" : `$${tvlUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+          </p>
           <p className="text-[13px] text-ink-soft mt-1">usdc across 2 chains</p>
         </div>
 
@@ -91,10 +96,12 @@ export default function LandingPage() {
             ✦ swarm
           </p>
           <p className="pixel text-[40px] text-ink leading-tight inline-flex items-center gap-2">
-            calm
-            <span className="w-3 h-3 rounded-full bg-mint-deep animate-heartbeat inline-block" />
+            {state?.paused ? "paused" : "calm"}
+            <span className={state?.paused ? "w-3 h-3 rounded-full bg-pink-hot inline-block" : "w-3 h-3 rounded-full bg-mint-deep animate-heartbeat inline-block"} />
           </p>
-          <p className="text-[13px] text-ink-soft mt-1">last cycle 2m ago</p>
+          <p className="text-[13px] text-ink-soft mt-1">
+            {cycleAgo ? `last check-in ${cycleAgo}` : "waiting for first check-in"}
+          </p>
         </div>
       </section>
 
