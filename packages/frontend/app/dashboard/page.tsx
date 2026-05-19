@@ -61,9 +61,9 @@ export default async function DashboardPage() {
           <p className="font-maru text-[13px] text-ink-faint uppercase tracking-wider mb-1">
             ❀ extra yield (7d)
           </p>
-          <p className="pixel text-[44px] text-ink leading-tight">—</p>
+          <p className="pixel text-[44px] text-ink leading-tight">0.0%</p>
           <p className="text-[13px] text-ink-soft mt-1">
-            {state && state.lastHarvest === 0n ? "no earnings yet" : `last earnings collected ${state ? timeAgo(state.lastHarvest) : "—"}`}
+            {state && state.lastHarvest === 0n ? "no swap fees on testnet yet — mainnet will earn from real volume" : `last earnings collected ${state ? timeAgo(state.lastHarvest) : "—"}`}
           </p>
         </div>
 

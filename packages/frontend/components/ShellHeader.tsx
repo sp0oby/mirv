@@ -45,10 +45,8 @@ export function ShellHeader() {
       <div className="mt-4 flex items-center gap-3 text-[13px] text-ink-soft">
         <span className="inline-flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full bg-mint-deep animate-heartbeat" />
-          live
+          swarm calm
         </span>
-        <span className="text-ink-faint">·</span>
-        <span>base + ethereum testnet</span>
         <span className="text-ink-faint">·</span>
         <span>reads refresh every 30s</span>
       </div>

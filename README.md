@@ -3,6 +3,51 @@
 > One deposit. Liquidity working on Ethereum + Base simultaneously (BNB enabled post-launch).
 > Run by an AI agent swarm. Powered by Uniswap V4 hooks + Hyperlane + Circle CCTP.
 
+---
+
+## TL;DR — what is this?
+
+**You:** deposit USDC on Base. Get shares (`mirvUSDC`). Withdraw whenever.
+
+**The protocol:** automatically splits your USDC across Base and Ethereum,
+parks it as liquidity in two Uniswap V4 pools (one per chain), and an AI
+swarm shifts the balance between them in real time to chase whichever side
+is paying more in fees. You keep 85% of the extra yield; the protocol takes 15%.
+
+**What's different:** instead of you bridging manually and managing two LP
+positions on two chains, you make one tx on one chain and a hook-coordinated
+swarm handles the cross-chain dance. The hook exposes cross-chain liquidity
+depth as a first-class on-chain primitive — `localDepthUsd(poolId)` is
+callable by any contract on either chain, not just mirv.
+
+**What it isn't:**
+- Not a yield aggregator (we don't pool into Aave/Morpho — we run our own LP)
+- Not a bridge (we use Circle CCTP for the USDC movement)
+- Not a yield farm (you're earning swap fees, not an emissions token)
+- Not audited yet — testnet only; mainnet is gated on external review
+
+**Do we use existing Uniswap pools?** No. In Uniswap V4, a pool is identified
+by `(currency0, currency1, fee, tickSpacing, hooks)` — so different hook
+means different pool. We deploy our own USDC/WETH pool on each chain with
+the `MirrorHook` attached. On testnet these pools have minimal bootstrap LP
+(the mechanism validates, the magnitudes are tiny). On mainnet we seed
+real depth ourselves at launch, then user deposits grow the pool.
+
+**Live now:**
+- Contracts on Base Sepolia + Ethereum Sepolia (rc6 candidate)
+- Frontend on Vercel (`mirv.vercel.app`)
+- Cross-chain dispatch + Hyperlane delivery + V4 modify-liquidity all working end-to-end
+
+**Coming next:**
+- External audit
+- `/docs` page for builders
+- x402-funded LLM payments so the swarm is fully autonomous (no centralized API key holder)
+- Mainnet launch on Base + Ethereum
+
+---
+
+## Longer version
+
 **mirv** (short for **mir**rored **v**ault) is a fully autonomous cross-chain liquidity protocol built on Uniswap V4. A public ERC-4626 vault on Base accepts a single USDC deposit; the protocol then bridges proportional amounts to sister chains via Circle CCTP and adds mirrored LP positions on each chain's V4 pool, keeping them synchronized in near-real-time through a swarm of LLM-powered agents.
 
 **Launch chains: Base (primary) + Ethereum.** BNB is designed-in but deferred to post-launch enablement via a single admin tx — both Circle CCTP support for BNB and Uniswap V4 on BNB Testnet are pending as of 2026-Q2.

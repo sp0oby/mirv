@@ -62,12 +62,6 @@ export default async function LandingPage() {
           >
             live on testnet
           </div>
-          <div
-            className="stamp absolute bottom-8 -right-5 text-[14px] px-3 py-1.5"
-            style={{ transform: "rotate(11deg)", color: "#3a2c3a" }}
-          >
-            testnet
-          </div>
         </div>
       </section>
 
@@ -87,8 +81,8 @@ export default async function LandingPage() {
           <p className="font-maru text-[13px] text-ink-faint uppercase tracking-wider mb-1">
             ❀ extra yield (7d)
           </p>
-          <p className="pixel text-[40px] text-ink leading-tight">—</p>
-          <p className="text-[13px] text-ink-soft mt-1">no earnings yet</p>
+          <p className="pixel text-[40px] text-ink leading-tight">0.0%</p>
+          <p className="text-[13px] text-ink-soft mt-1">testnet · earns from real volume on mainnet</p>
         </div>
 
         <div className="frame-outer p-6" style={{ transform: "rotate(-0.4deg)" }}>
