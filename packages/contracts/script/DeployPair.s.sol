@@ -11,7 +11,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IMailbox} from "../src/interfaces/IHyperlane.sol";
 import {EnvHelpers} from "./lib/EnvHelpers.sol";
 
-/// @title DeployPair — generic per-pair deployment for mirv
+/// @title DeployPair -- generic per-pair deployment for mirv
 /// @notice Parameterized version of Deploy.s.sol. Takes pair-specific config
 ///         (name, fee, tickSpacing, oracle feeds, vault asset, hook salt) from
 ///         env vars so we don't have to fork the deploy script per pair.
@@ -20,18 +20,18 @@ import {EnvHelpers} from "./lib/EnvHelpers.sol";
 ///         per-chain deploy steps for a NEW pair onto the EXISTING factory.
 ///
 /// @dev    Required env per pair (set before running):
-///           MIRROR_PAIR_NAME       — e.g. "BTC-USDC-V1"
-///           MIRROR_PAIR_FEE        — e.g. 3000
-///           MIRROR_PAIR_TICK_SPACING — e.g. 60
-///           MIRROR_PAIR_VAULT_ASSET — e.g. USDC address on this chain
-///           MIRROR_PAIR_OTHER_TOKEN — e.g. cbBTC address on this chain
-///           MIRROR_PAIR_PYTH_FEED_ID — Pyth feed for the volatile token's USD price
-///           MIRROR_PAIR_CHAINLINK_FEED — Chainlink aggregator on this chain
-///           MIRROR_PAIR_VAULT_NAME — ERC-4626 share name e.g. "mirv BTC/USDC Vault"
-///           MIRROR_PAIR_VAULT_SYMBOL — ERC-4626 symbol e.g. "mirvBTC-USDC"
-///           MIRROR_PAIR_HOOK_SALT  — pre-mined CREATE2 salt from MineHookAddress.s.sol
-///           MIRROR_FACTORY_BASE    — existing factory address
-///           TREASURY_BASE          — existing treasury address (fees aggregate)
+///           MIRROR_PAIR_NAME       -- e.g. "BTC-USDC-V1"
+///           MIRROR_PAIR_FEE        -- e.g. 3000
+///           MIRROR_PAIR_TICK_SPACING -- e.g. 60
+///           MIRROR_PAIR_VAULT_ASSET -- e.g. USDC address on this chain
+///           MIRROR_PAIR_OTHER_TOKEN -- e.g. cbBTC address on this chain
+///           MIRROR_PAIR_PYTH_FEED_ID -- Pyth feed for the volatile token's USD price
+///           MIRROR_PAIR_CHAINLINK_FEED -- Chainlink aggregator on this chain
+///           MIRROR_PAIR_VAULT_NAME -- ERC-4626 share name e.g. "mirv BTC/USDC Vault"
+///           MIRROR_PAIR_VAULT_SYMBOL -- ERC-4626 symbol e.g. "mirvBTC-USDC"
+///           MIRROR_PAIR_HOOK_SALT  -- pre-mined CREATE2 salt from MineHookAddress.s.sol
+///           MIRROR_FACTORY_BASE    -- existing factory address
+///           TREASURY_BASE          -- existing treasury address (fees aggregate)
 ///
 /// @dev    Run order (per new pair):
 ///           1. forge script script/MineHookAddress.s.sol  (mines hook salt)
@@ -68,6 +68,7 @@ contract DeployPairBase is DeployPairCommon {
         // Chain-specific infra (already deployed)
         address mailbox = vm.envAddress("HYPERLANE_MAILBOX_BASE");
         address poolMgr = vm.envAddress("POOL_MANAGER_BASE");
+        address pyth = vm.envAddress("PYTH_ADDRESS_BASE");
         address cctpMessenger = vm.envAddress("CCTP_TOKEN_MESSENGER_BASE");
         address factoryAddr = vm.envAddress("MIRROR_FACTORY_BASE");
         address treasury = vm.envAddress("TREASURY_BASE");
@@ -82,11 +83,11 @@ contract DeployPairBase is DeployPairCommon {
 
         // 1. Hook for this pair on this chain
         MirrorHook hook = new MirrorHook{salt: hookSalt}(
-            IPoolManager(poolMgr), mailbox, chainlink, chainlink, pythFeed, canonicalId, deployer
+            IPoolManager(poolMgr), mailbox, pyth, chainlink, pythFeed, canonicalId, deployer
         );
         console2.log("MirrorHook:", address(hook));
 
-        // 2. Vault — ERC-4626 over the pair's deposit asset
+        // 2. Vault -- ERC-4626 over the pair's deposit asset
         MirrorVault vault = new MirrorVault(
             IERC20(vaultAsset), cctpMessenger, treasury, deployer, vaultName, vaultSymbol
         );
@@ -137,13 +138,14 @@ contract DeployPairSister is DeployPairCommon {
         // via MIRROR_PAIR_SISTER_PREFIX="ETH_SEPOLIA" etc. at run time.
         address mailbox = vm.envAddress("HYPERLANE_MAILBOX_MAINNET");
         address poolMgr = vm.envAddress("POOL_MANAGER_MAINNET");
+        address pyth = vm.envAddress("PYTH_ADDRESS_MAINNET");
 
         bytes32 canonicalId = _canonicalPairId(pairName, fee, tickSpacing);
 
         vm.startBroadcast(deployerKey);
 
         MirrorHook hook = new MirrorHook{salt: hookSalt}(
-            IPoolManager(poolMgr), mailbox, chainlink, chainlink, pythFeed, canonicalId, deployer
+            IPoolManager(poolMgr), mailbox, pyth, chainlink, pythFeed, canonicalId, deployer
         );
         console2.log("MirrorHook (sister):", address(hook));
 

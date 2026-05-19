@@ -11,16 +11,16 @@ import {Treasury} from "../src/Treasury.sol";
 import {Relayer} from "../src/Relayer.sol";
 import {EnvHelpers} from "./lib/EnvHelpers.sol";
 
-/// @title DeployTreasuryStack — TODO 8.5.8 (Treasury Safe + Timelock + migration)
+/// @title DeployTreasuryStack -- TODO 8.5.8 (Treasury Safe + Timelock + migration)
 /// @notice One-shot script that:
 ///         1. Deploys an `OZ TimelockController` with a 24h delay
 ///         2. Migrates all privileged setters (owner / treasury fields) on
 ///            the deployed mirv contracts from the current EOA to the Timelock
 ///         3. Verifies on-chain that every privileged role now points at the
-///            Timelock — script reverts loudly if any setter still points at
+///            Timelock -- script reverts loudly if any setter still points at
 ///            the EOA, so an incomplete migration is impossible to deploy
 ///
-/// @dev    The Gnosis Safe is NOT deployed by this script — you deploy that
+/// @dev    The Gnosis Safe is NOT deployed by this script -- you deploy that
 ///         from the Gnosis Safe UI first (safer than scripting the Safe
 ///         singleton + proxy setup) and pass its address in as the
 ///         `proposer` + `executor` of the Timelock.
@@ -67,7 +67,7 @@ contract DeployTreasuryStack is Script {
 
         // ─── Step 1: deploy Timelock ────────────────────────────────────
         // Proposer + executor = safe. Admin = address(0) so even the deployer
-        // can't bypass the timelock once deployed. This is irreversible —
+        // can't bypass the timelock once deployed. This is irreversible --
         // intentionally so. Operate the protocol only through the Safe -> Timelock.
         address[] memory proposers = new address[](1);
         proposers[0] = safe;
@@ -78,7 +78,7 @@ contract DeployTreasuryStack is Script {
             TIMELOCK_DELAY,
             proposers,
             executors,
-            address(0) // no admin — protocol is governed only by Safe via Timelock
+            address(0) // no admin -- protocol is governed only by Safe via Timelock
         );
         console2.log("Timelock deployed:", address(timelock));
 
@@ -102,7 +102,7 @@ contract DeployTreasuryStack is Script {
         // (R-5). For migration, we propose a treasury change to the Safe
         // address. After R-5's 24h delay, anyone can `finalizePendingTreasury`.
         MirrorVault(vault).proposeTreasury(safe);
-        console2.log("Vault.proposeTreasury(safe) — finalize after 24h via executeTreasury()");
+        console2.log("Vault.proposeTreasury(safe) -- finalize after 24h via executeTreasury()");
 
         // If a Relayer is deployed (ETH side), uncomment + add it here:
         //   address relayer = vm.envAddress("RELAYER_MAINNET");
@@ -111,7 +111,7 @@ contract DeployTreasuryStack is Script {
         vm.stopBroadcast();
 
         // ─── Step 3: verification ───────────────────────────────────────
-        // Script reverts if any setter is still pointing at the EOA — an
+        // Script reverts if any setter is still pointing at the EOA -- an
         // incomplete migration is a misconfiguration that should fail loud.
         require(MirrorHook(payable(hook)).owner() == address(timelock), "hook owner != timelock");
         require(MirrorFactory(factory).owner() == address(timelock), "factory owner != timelock");
