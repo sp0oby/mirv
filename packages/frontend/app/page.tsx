@@ -124,6 +124,10 @@ export default async function LandingPage() {
             </article>
           ))}
         </div>
+        <p className="text-[14px] text-ink-soft mt-6 max-w-[60ch]">
+          want the longer version (where the extra yield comes from, what bounds the swarm, contract addresses)?{" "}
+          <Link href="/docs" className="underline text-pink-hot">read the docs →</Link>
+        </p>
       </section>
 
       {/* ─── The swarm ─────────────────────────────────────────────────── */}

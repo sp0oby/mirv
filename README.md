@@ -46,6 +46,55 @@ real depth ourselves at launch, then user deposits grow the pool.
 
 ---
 
+## How do users actually make money?
+
+Short answer: **swap fees on the V4 pools, not arbitrage between pools.**
+
+The flow:
+1. You deposit USDC on Base. The vault splits it: ~60% goes into the
+   Base USDC/WETH V4 pool as LP, ~40% (via CCTP) goes into the Ethereum
+   USDC/WETH V4 pool as LP.
+2. Every trader who swaps through either pool pays a 0.30% fee. Your share
+   of those fees scales with your share of the in-range liquidity.
+3. You redeem your shares whenever. The share price has gone up because
+   `totalAssets` grew (fees accrued, LP value grew). You get back more USDC
+   than you put in.
+
+mirv is **never the taker**. We don't arbitrage between pools, we don't run
+MEV. We're just an LP that happens to live on two chains at once.
+
+### Where the "extra" comes from
+
+A passive cross-chain LP has to pick allocations upfront — say 50/50 — and
+live with it. If Base has 80% of the trading volume that week, the passive
+LP loses ~30% of potential fees because too much capital sits idle on
+Ethereum.
+
+mirv's agent swarm rebalances every 45 seconds. If Base's pool is paying
+more fees per dollar of liquidity, USDC shifts from Ethereum to Base via
+CCTP. Your LP is always concentrated where the volume is.
+
+Illustrative math at $1M TVL, $10M weekly cross-chain volume:
+
+| Strategy | Fee capture | Annual yield |
+|---|---|---|
+| Passive 50/50 split | ~60% of theoretical max | ~6.0% APY |
+| mirv rebalance | ~90%+ | ~9.0% APY |
+| Extra yield (mirv – passive) | — | **+3.0% APY** |
+| User keeps 85% of extra | — | **+2.55% APY on top of baseline** |
+
+(Real ratios depend on actual pool depth and volume distribution. Numbers
+above are illustrative.)
+
+### What "extra yield (7d)" measures on the dashboard
+
+The `MirrorVault.harvest()` function compares `totalAssets` against
+`principalTracked + baselineYieldAccrued`. The excess is extra yield earned
+above what a passive LP would have made. 15% mints to the treasury as fee
+shares; 85% stays in the share price (i.e. you keep it).
+
+---
+
 ## Longer version
 
 **mirv** (short for **mir**rored **v**ault) is a fully autonomous cross-chain liquidity protocol built on Uniswap V4. A public ERC-4626 vault on Base accepts a single USDC deposit; the protocol then bridges proportional amounts to sister chains via Circle CCTP and adds mirrored LP positions on each chain's V4 pool, keeping them synchronized in near-real-time through a swarm of LLM-powered agents.
