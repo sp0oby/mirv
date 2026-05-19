@@ -43,6 +43,12 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
     // ─── Events ─────────────────────────────────────────────────────────────
     event MessageReceived(uint32 indexed origin, bytes32 indexed sender, bytes32 messageId);
     event RebalanceExecuted(bytes32 indexed pairId, int128 deltaToken0, int128 deltaToken1);
+    /// @dev Emitted when the Relayer receives a Hyperlane message with both token
+    ///      deltas equal to zero — a depth-only notification that originated from
+    ///      a source hook's `_handleEvent` (V4 swap/LP callback). The Relayer is
+    ///      an LP executor, not a depth oracle, so we no-op cleanly instead of
+    ///      letting V4 revert on zero-liquidity modifyLiquidity.
+    event RebalanceSkippedZeroDelta(bytes32 indexed pairId);
     event PoolRegistered(bytes32 indexed pairId, PoolId poolId);
     event AuthorizedSenderUpdated(bytes32 indexed sender, bool authorized);
     event MailboxProposed(address indexed newMailbox, uint256 effectiveAt);
@@ -127,6 +133,18 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
     // ─── Internal ────────────────────────────────────────────────────────────
 
     function _executeRebalance(RebalanceMessage memory rm) internal {
+        // Depth-only notifications (sent by a source hook's `_handleEvent` on a
+        // V4 swap/LP callback) carry `deltaToken0 == deltaToken1 == 0` because
+        // they exist to update the destination's `sisterDepths`, not to execute
+        // an LP move. V4's `modifyLiquidity` reverts on a zero liquidity delta,
+        // which would otherwise pin the Hyperlane message in the pending queue.
+        // Treat the zero-delta case as an explicit no-op + event so monitoring
+        // can see the message was processed without an LP change.
+        if (rm.deltaToken0 == 0 && rm.deltaToken1 == 0) {
+            emit RebalanceSkippedZeroDelta(rm.pairId);
+            return;
+        }
+
         PoolKey memory key = _poolKeys[rm.pairId];
 
         ModifyLiquidityParams memory params = ModifyLiquidityParams({

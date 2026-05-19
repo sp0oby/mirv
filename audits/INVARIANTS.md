@@ -1,6 +1,6 @@
 # mirv — Invariants
 
-**Tag:** `v1.0.0-rc5` (R-1, R-2, R-3, R-5, R-7, R-10, R-11, R-12, R-13 landed + Relayer placeholder math closed; see I-15..I-22 below).
+**Tag:** `v1.0.0-rc6` (rc5 hardening + zero-delta short-circuit on Relayer; see I-15..I-23 below).
 
 Properties that must hold across every reachable post-transaction state. Each entry: the invariant statement, where it's enforced, why a violation matters, and how it's tested today.
 
@@ -335,6 +335,20 @@ Both bugs were latent because no test prior to rc5 exercised the full `_executeR
 
 ---
 
+## I-23. Zero-delta short-circuit on Relayer (rc6)
+
+> When `Relayer.handle` receives a `RebalanceMessage` with `deltaToken0 == 0 && deltaToken1 == 0`, `_executeRebalance` emits `RebalanceSkippedZeroDelta(pairId)` and returns. It does NOT call `poolManager.unlock`, does NOT compute `liquidityFromDeltas`, does NOT touch any token.
+
+**Why:** A source MirrorHook's `_handleEvent` (V4 swap/LP callback) emits depth-only notifications carrying zero deltas — the intent is to update `sisterDepths` on the recipient, not to execute an LP move. Before rc6, the Relayer (which is configured as a sister so the source hook reaches it for executable dispatches too) would try to run `modifyLiquidity` with `liquidityDelta == 0` and V4 would revert. That kept Hyperlane messages pinned in the pending queue forever. The short-circuit gives them a clean terminal state.
+
+**Enforced by:** `Relayer._executeRebalance` (l. 109-119) — explicit conditional before the `poolManager.unlock` call.
+
+**Tested by:** `Relayer.t.sol::test_handleSkipsZeroDeltaMessage` — sends a zero-delta payload via the full `handle()` path (mailbox + authorized sender), asserts `RebalanceSkippedZeroDelta` fired AND `RebalanceExecuted` did NOT.
+
+**Live validation (rc5, pre-fix):** Hyperlane message `0x2f3be7ba…216b` (Base→ETH LP-callback depth notification) failed to deliver because gas estimation reverted on the zero-liquidity V4 modify. After redeploying with this fix, the same message shape would deliver as a clean no-op.
+
+---
+
 ## Properties out of scope as on-chain invariants (operator-side)
 
 These hold by procedure, not code. Auditor should flag if any could be promoted to an on-chain check:
@@ -373,6 +387,7 @@ These hold by procedure, not code. Auditor should flag if any could be promoted 
 | I-20 Oracle deviation cross-check (R-11) | ✅ | Hook — 3 fork tests |
 | I-21 Sister-depth cap on inbound handle (R-13) | ✅ | Hook — 2 fork tests |
 | I-22 Relayer rebalance execution math (rc5) | ✅ | Relayer end-to-end via HookCallback fork test |
+| I-23 Zero-delta short-circuit on Relayer (rc6) | ✅ | `Relayer.t.sol::test_handleSkipsZeroDeltaMessage` |
 | I-5 allocation sum (runner-gap closed) | ✅ | `invariant_allocationSumIsZeroOrFull` + 3 new VaultHandler actions |
 | I-16 timelock pendingTreasury consistency (strengthened) | ✅ | `invariant_pendingTreasuryConsistency` |
 | I-19 guardian fixture stable under fuzz | ✅ | `invariant_guardianStillConfigured` |

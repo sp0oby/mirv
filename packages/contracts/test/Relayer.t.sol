@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {Relayer} from "../src/Relayer.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {Currency} from "v4-core/src/types/Currency.sol";
@@ -198,6 +198,61 @@ contract RelayerTest is Test {
         relayer.registerPool(pairId, key);
         // After registering, handle's "PoolNotRegistered" path is bypassed for this pairId
         // (will fail later at the V4 modifyLiquidity step in a real fork test)
+    }
+
+    // ─── Zero-delta short-circuit (depth-only notification) ──────────────────
+    /// @dev When handle() receives a Hyperlane message with both deltas == 0
+    ///      (a depth notification originating from a source hook's _handleEvent
+    ///      V4 callback), the Relayer should emit RebalanceSkippedZeroDelta
+    ///      and return without touching the PoolManager. Pre-fix this would
+    ///      have reverted at V4's "zero liquidity" check, pinning the
+    ///      Hyperlane message in the pending queue forever.
+    function test_handleSkipsZeroDeltaMessage() public {
+        bytes32 pairId = keccak256("zero-delta-pair");
+
+        // Register the pool so PoolNotRegistered isn't the revert path.
+        vm.startPrank(owner);
+        relayer.setAuthorizedSender(sisterHook, true);
+        relayer.registerPool(
+            pairId,
+            PoolKey({
+                currency0: Currency.wrap(makeAddr("token0")),
+                currency1: Currency.wrap(makeAddr("token1")),
+                fee: 3000,
+                tickSpacing: 60,
+                hooks: IHooks(makeAddr("hook"))
+            })
+        );
+        vm.stopPrank();
+
+        // Depth-only notification: zero deltas, zero ticks.
+        bytes memory payload = abi.encode(
+            Relayer.RebalanceMessage({
+                pairId: pairId,
+                deltaToken0: 0,
+                deltaToken1: 0,
+                newFee: 3000,
+                tickLower: 0,
+                tickUpper: 0,
+                minExpectedYield: 0,
+                currentDepth: 999e6
+            })
+        );
+
+        // Expect the skip event, NOT a RebalanceExecuted or V4 revert.
+        vm.recordLogs();
+        vm.prank(mailbox);
+        relayer.handle(sisterDomain, sisterHook, payload);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bool foundSkip;
+        bool foundExecuted;
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].topics[0] == keccak256("RebalanceSkippedZeroDelta(bytes32)")) foundSkip = true;
+            if (logs[i].topics[0] == keccak256("RebalanceExecuted(bytes32,int128,int128)")) foundExecuted = true;
+        }
+        assertTrue(foundSkip, "RebalanceSkippedZeroDelta must fire on zero-delta payload");
+        assertFalse(foundExecuted, "RebalanceExecuted must NOT fire on zero-delta payload");
     }
 
     function test_registerPoolByNonOwnerReverts() public {

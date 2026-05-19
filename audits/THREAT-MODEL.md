@@ -1,6 +1,6 @@
 # mirv — Threat Model
 
-**Tag:** `v1.0.0-rc5` (R-1, R-2, R-3, R-5, R-7, R-10, R-11, R-12, R-13 landed; R-4, R-6, R-9 documented in `audits/OPERATIONS.md`; only R-8 remains open by deliberate choice. rc5 also fixes the Relayer's placeholder `_liquidityFromDeltas` and the inverted V4 sign convention in `_settleDeltas` — both were tracked as pre-mainnet blockers).
+**Tag:** `v1.0.0-rc6` (rc5 hardening + zero-delta short-circuit on `Relayer._executeRebalance` so depth-only LP-callback notifications no longer pin Hyperlane messages in the pending queue).
 
 This document enumerates the actors that can interact with the in-scope contracts (`audits/SCOPE.md`), their attack surfaces, and the mitigations in place. Severity uses the rubric in `SCOPE.md`.
 

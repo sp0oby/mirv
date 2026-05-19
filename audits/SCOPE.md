@@ -1,9 +1,9 @@
 # mirv — Audit Scope
 
-**Tag:** `v1.0.0-rc5` (R-1, R-2, R-3, R-5, R-7, R-10, R-11, R-12, R-13 landed on top of rc1; R-4, R-6, R-9 in `audits/OPERATIONS.md`; only R-8 deferred by design; Relayer placeholder math + inverted V4 settle convention fixed at rc5)
+**Tag:** `v1.0.0-rc6` (R-1, R-2, R-3, R-5, R-7, R-10, R-11, R-12, R-13 landed; R-4, R-6, R-9 in `audits/OPERATIONS.md`; only R-8 deferred by design; Relayer placeholder math + inverted V4 settle fixed at rc5; zero-delta short-circuit added at rc6 to handle LP-callback depth notifications cleanly)
 **Pragma:** `solidity 0.8.26`
 **Compiler:** `solc 0.8.26`, `via_ir = true`, `optimizer_runs = 200`
-**Test state at tag:** `forge test` **131/131** (101 unit/invariant + 30 fork) · Slither 7 high/medium in-scope under repo config (all pre-existing won't-fix patterns), no new findings from rc4→rc5 · Mythril 34 SWC-101 all false-positive on 0.8+ (documented)
+**Test state at tag:** `forge test` **135/135** (105 unit/invariant + 30 fork) · Slither 7 high/medium in-scope under repo config (all pre-existing won't-fix patterns), no new findings from rc5→rc6 · Mythril 34 SWC-101 all false-positive on 0.8+ (documented)
 
 ---
 
@@ -130,7 +130,7 @@ One per non-primary chain. Holds LP positions and any pre-seeded inventory (WETH
 |-----------------------------------|------------------|---------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `constructor`                     | nonpayable       | n/a                                                           | Reverts on zero poolManager/mailbox.                                                                                                                                                                   |
 | `handle` (IMessageRecipient)      | payable          | `msg.sender == mailbox` + `authorizedSenders[sender]`         | `whenNotPaused nonReentrant`. Decodes RebalanceMessage. Reverts `PoolNotRegistered` if pairId not pre-registered.                                                                                       |
-| `_executeRebalance` (internal)    | nonpayable       | n/a                                                           | Computes `liquidityDelta` from `(d0, d1, tickLower, tickUpper)` via canonical TickMath + LiquidityAmounts (rc5; was a placeholder in rc1-rc4 that returned `int256(d0)`). Calls `poolManager.unlock`. |
+| `_executeRebalance` (internal)    | nonpayable       | n/a                                                           | rc6: short-circuits on zero-delta messages (depth-only notifications from a source hook's `_handleEvent`) — emits `RebalanceSkippedZeroDelta` and returns without touching the PoolManager. Otherwise computes `liquidityDelta` via TickMath + LiquidityAmounts (rc5; was a placeholder in rc1-rc4 that returned `int256(d0)`) and calls `poolManager.unlock`. |
 | `unlockCallback` (external)       | nonpayable       | `msg.sender == poolManager`                                   | Decodes `(PoolKey, ModifyLiquidityParams)`. Calls `poolManager.modifyLiquidity` then `_settleDeltas`.                                                                                                  |
 | `_settleDeltas` (internal)        | nonpayable       | n/a                                                           | rc5: uses `CurrencySettler.settle` / `CurrencySettler.take` (OZ uniswap-hooks helper) for both ERC-20 + native paths. Fixes the rc4 inverted sign convention (used to call `take` when caller owed and bare `transfer` when pool owed). |
 | `_liquidityFromDeltas` (internal) | view             | n/a                                                           | rc5: reads `poolManager.getSlot0` via `StateLibrary`, computes `LiquidityAmounts.getLiquidityForAmounts(sqrtPriceX96, sqrtA, sqrtB, |d0|, |d1|)`, applies sign from `d0 / d1`.                          |
