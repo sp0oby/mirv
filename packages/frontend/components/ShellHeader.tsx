@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Mascot } from "./Mascot";
 import { HeaderWalletButton } from "./HeaderWalletButton";
+import { SwarmStatus } from "./SwarmStatus";
 
 const NAV = [
   { href: "/",          label: "home" },
@@ -44,14 +45,7 @@ export function ShellHeader() {
         <HeaderWalletButton />
       </div>
 
-      <div className="mt-4 flex items-center gap-3 text-[13px] text-ink-soft">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-mint-deep animate-heartbeat" />
-          swarm calm
-        </span>
-        <span className="text-ink-faint">·</span>
-        <span>reads refresh every 30s</span>
-      </div>
+      <SwarmStatus />
     </header>
   );
 }
