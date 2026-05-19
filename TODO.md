@@ -3,13 +3,18 @@
 **Legend:** `[x]` done & tested · `[ ]` not started · `[~]` in progress · `[?]` blocked / needs decision
 **Updated:** 2026-05-18 (post-soak-audit pass)
 
-**Current build status:** ✅ `forge build` green · ✅ `forge test` **134/134** passing (104 unit/invariant + 30 fork) · ✅ `tsc` zero errors · ✅ **rc5 testnet redeployed** on Base Sepolia + ETH Sepolia with all R-1..R-13 hardening + Relayer fix · ✅ CI green on `main` · ✅ Phase A (canonical pairId dispatch) + Phase D (CCTP deposit) validated end-to-end on v5 · ✅ Hyperlane source-side dispatch validated against rc5 contracts 2026-05-18 (all 5 expected events fired, messageId `0x3d8f85d2…d240`) · ✅ Pre-audit hardening (R-1..R-13 closed/landed/documented), tagged `v1.0.0-rc5` · ✅ Monitoring stubs prepared for Phase 9 wire-up · 🟡 Hyperlane destination-side delivery to ETH Sepolia is best-effort via testnet relayers — not blocking · 🟡 Phase 5.B agent soak: source-side + addresses + cast-poolId checks pass; live tsx soak deferred on system load.
+**Current build status:** ✅ `forge build` green · ✅ `forge test` **134/134** passing (104 unit/invariant + 30 fork) · ✅ `tsc` zero errors · ✅ **rc5 testnet redeployed + bootstrap LP seeded on both pools (L=2e9 each) + Hyperlane full pipeline validated end-to-end** · ✅ CI green on `main` · ✅ All hardening (R-1..R-13) live on chain · ✅ rc5 Relayer math + CurrencySettler proven on Base→ETH delivery (tx `0x6e3bb567…7381`) · ✅ rc5 hook.handle() proven on ETH→Base delivery (tx `0x49cb5e21…6e54`) · ✅ Monitoring stubs prepared · 🟡 Phase 5.B agent soak: deterministically verified; live tsx soak deferred on system load.
 
 **rc5 testnet addresses** (redeployed 2026-05-18 with R-1..R-13 hardening + Relayer TickMath fix):
 - Base Sepolia: Treasury `0x00288400…0392` · Hook `0xA059C854…c540` · Vault `0x062b9E54…f37b` · Factory `0xC3e117CD…C2A7`
 - ETH Sepolia:  Hook `0xc3233eb9…8540` · Relayer `0x72e2538a…0155`
 - Canonical pairId (ETH-USDC-V1): `0x7a00c543…085b04` (unchanged from v5)
-- Hyperlane source-side dispatch validated 2026-05-18: tx `0x8a8841d1…000f` (Base Sepolia) emitted `RebalanceDispatched` with messageId `0x3d8f85d2…d240` and Hyperlane Mailbox + IGP + MerkleTreeHook all fired correctly. Destination-side delivery on ETH Sepolia is best-effort via Hyperlane testnet relayers (separate from contract correctness).
+- Hyperlane source-side dispatch validated 2026-05-18: tx `0x8a8841d1…000f` (Base Sepolia) emitted `RebalanceDispatched` with messageId `0x3d8f85d2…d240` and Hyperlane Mailbox + IGP + MerkleTreeHook all fired correctly.
+- **Full cross-chain pipeline validated end-to-end on rc5 contracts 2026-05-18**: bootstrap LP seeded on both pools (L=2e9 each), Hyperlane delivered 2 messages live:
+  - Base→ETH agent dispatch (`0x3d8f85d2…d240`) → ETH Sepolia tx `0x6e3bb567…7381`: mailbox → Relayer.handle → MessageReceived → V4 modifyLiquidity → CurrencySettler → USDC + WETH transfers → RebalanceExecuted. **First on-chain confirmation that the rc5 Relayer math + CurrencySettler fix is correct.**
+  - ETH→Base LP-callback (`0x6a83c59d…6504`) → Base Sepolia tx `0x49cb5e21…6e54`: mailbox → MirrorHook.handle → SisterDepthReported → SisterNotificationReceived. `sisterDepths[ETH][canonical]` now = 8.256e24, matching ETH hook's localDepth. R-13 cap correctly bypassed (bootstrap case, prior=0).
+  - Message 2 (Base→ETH LP-callback depth notification, `0x2f3be7ba…216b`) still pending — fails to relay because it carries `deltaToken0=deltaToken1=0` and V4 reverts on zero-liquidity modify. Design quirk (LP-callback dispatches are depth notifications, not LP moves) — agent should use `dispatchRebalance` for actual LP changes.
+- Relayer funded with 10 USDC + 0.001 WETH on ETH Sepolia as the inventory floor for receiving cross-chain rebalances.
 - v5 testnet addresses (deployed 2026-05-17 at d09a661) are abandoned; small stranded balances accepted as sunk testnet cost.
 
 ---
