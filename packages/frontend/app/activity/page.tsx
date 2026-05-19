@@ -1,68 +1,51 @@
-// Activity feed — the agent + cross-chain dispatch event stream.
-// This is the page where the dark-chibi "predator pause → sharp dispatch"
-// motion register earns its keep — long calm intervals, then a row drops in
-// with a small accent on the type column. Not implemented as motion yet
-// (v0 just lists), but the data shape is sized for that.
+import { readRecentActivity, shortTx, type ActivityEvent } from "@/lib/contracts";
 
-const SAMPLE_EVENTS = [
-  {
-    id: 1,
-    kind: "dispatch",
-    src: "Base Sepolia",
-    dst: "Ethereum Sepolia",
-    pair: "ETH-USDC-V1",
-    msgId: "0x6e3bb567…7381",
-    detail: "agent rebalance: +1e6 USDC / +1e6 WETH wei, tickRange [199740, 199860]",
-    delivered: true,
-    deltaKind: "execute",
-    when: "23m ago",
-  },
-  {
-    id: 2,
-    kind: "skip",
-    src: "Base Sepolia",
-    dst: "Ethereum Sepolia",
-    pair: "ETH-USDC-V1",
-    msgId: "0xeee761e9…5f13",
-    detail: "zero-delta depth notification — rc6 short-circuit fired",
-    delivered: true,
-    deltaKind: "skipped",
-    when: "31m ago",
-  },
-  {
-    id: 3,
-    kind: "notify",
-    src: "Ethereum Sepolia",
-    dst: "Base Sepolia",
-    pair: "ETH-USDC-V1",
-    msgId: "0x49cb5e21…6e54",
-    detail: "sister depth update: $8,256 → stored",
-    delivered: true,
-    deltaKind: "inbound",
-    when: "26m ago",
-  },
-  {
-    id: 4,
-    kind: "lp-add",
-    src: "Base Sepolia",
-    dst: "—",
-    pair: "ETH-USDC-V1",
-    msgId: "—",
-    detail: "bootstrap LP seeded at liquidity 2,000,000,000",
-    delivered: true,
-    deltaKind: "bootstrap",
-    when: "42m ago",
-  },
-];
+// Activity feed — live event stream from rc6 testnet. Each render queries
+// the last hour of blocks on Base + Ethereum and merges the events into a
+// unified feed. Server component, no wallet needed.
+export const revalidate = 30;
 
-const KIND_COLORS: Record<string, string> = {
+const KIND_COLORS: Record<ActivityEvent["kind"], string> = {
   dispatch: "#ef48aa",
-  skip: "#8b7a8b",
-  notify: "#a2d2ff",
-  "lp-add": "#aaf0d1",
+  execute:  "#aaf0d1",
+  skip:     "#8b7a8b",
+  notify:   "#a2d2ff",
+  cap:      "#ffd206",
 };
 
-export default function ActivityPage() {
+const KIND_TITLES: Record<ActivityEvent["kind"], string> = {
+  dispatch: "rebalance dispatched",
+  execute:  "rebalance executed",
+  skip:     "skipped (zero-delta)",
+  notify:   "sister notification received",
+  cap:      "sister depth capped",
+};
+
+function scanLink(chain: "base" | "eth", tx: string): string {
+  const host = chain === "base" ? "sepolia.basescan.org" : "sepolia.etherscan.io";
+  return `https://${host}/tx/${tx}`;
+}
+
+function chainArrow(kind: ActivityEvent["kind"], chain: "base" | "eth"): string {
+  if (kind === "dispatch" && chain === "base") return "Base → Ethereum";
+  if (kind === "dispatch" && chain === "eth")  return "Ethereum → Base";
+  if (kind === "execute") return "Ethereum (relayer)";
+  if (kind === "skip")    return "Ethereum (no-op)";
+  if (kind === "notify" && chain === "base") return "← from Ethereum hook";
+  if (kind === "notify" && chain === "eth")  return "← from Base hook";
+  if (kind === "cap" && chain === "base")    return "Base hook (sister cap)";
+  return chain;
+}
+
+export default async function ActivityPage() {
+  let events: ActivityEvent[] = [];
+  let err: string | null = null;
+  try {
+    events = await readRecentActivity();
+  } catch (e) {
+    err = e instanceof Error ? e.message : String(e);
+  }
+
   return (
     <div className="pt-4">
       <header className="mb-10">
@@ -70,14 +53,33 @@ export default function ActivityPage() {
           activity
         </h1>
         <p className="text-[16px] text-ink-soft max-w-[60ch]">
-          everything the swarm + the contracts have done. dispatch events
-          from each MirrorHook, delivery confirmations from each Relayer /
-          handle(), and the rc6 zero-delta short-circuits.
+          everything the swarm + the contracts have done in the last hour.
+          dispatches from each MirrorHook, deliveries on the Relayer, and
+          inbound depth notifications on each hook's handle().
         </p>
       </header>
 
+      {err && (
+        <section className="frame-outer p-5 mb-8 bg-paper-warm">
+          <p className="text-[14px] text-ink">⚠ public rpc was unreachable. retry in 30s.</p>
+          <pre className="text-[11px] text-ink-faint mt-2 break-all">{err}</pre>
+        </section>
+      )}
+
+      {!err && events.length === 0 && (
+        <section className="frame-outer p-6 mb-8 text-center">
+          <p className="text-[15px] text-ink-soft mb-2">
+            no on-chain activity in the last hour.
+          </p>
+          <p className="text-[12px] text-ink-faint">
+            this is normal — the swarm only dispatches when imbalance exceeds
+            3% between chains, and testnet activity is sparse.
+          </p>
+        </section>
+      )}
+
       <section className="space-y-3 mb-10">
-        {SAMPLE_EVENTS.map((e, i) => (
+        {events.map((e, i) => (
           <article
             key={e.id}
             className="frame-outer p-5"
@@ -92,21 +94,23 @@ export default function ActivityPage() {
               <div className="flex-1">
                 <div className="flex items-baseline justify-between gap-3 mb-1">
                   <span className="font-maru text-[15px] font-semibold text-ink">
-                    {e.src} <span className="text-ink-faint mx-1">→</span> {e.dst}
+                    {KIND_TITLES[e.kind]}
                   </span>
-                  <span className="text-[12px] text-ink-faint">{e.when}</span>
+                  <span className="text-[12px] text-ink-faint font-mono">
+                    block {e.block.toString()}
+                  </span>
                 </div>
-                <p className="text-[14px] text-ink-soft leading-snug mb-2">
-                  {e.detail}
+                <p className="text-[13px] text-ink-soft leading-snug mb-2">
+                  {chainArrow(e.kind, e.chain)}
                 </p>
                 <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-ink-faint">
-                  <span>msg {e.msgId}</span>
-                  <span>·</span>
-                  <span>{e.pair}</span>
-                  {e.delivered && (
+                  <a className="underline text-pink-hot" href={scanLink(e.chain, e.tx)} target="_blank" rel="noopener noreferrer">
+                    {shortTx(e.tx)}
+                  </a>
+                  {e.msgId && (
                     <>
                       <span>·</span>
-                      <span className="text-mint-deep">delivered ✓</span>
+                      <span>msg {shortTx(e.msgId)}</span>
                     </>
                   )}
                 </div>
@@ -117,10 +121,7 @@ export default function ActivityPage() {
       </section>
 
       <p className="text-[12px] text-ink-faint">
-        v0 shows sample data drawn from the actual live txs in the rc6
-        validation. v1 streams `RebalanceDispatched` / `MessageReceived` /
-        `RebalanceExecuted` / `RebalanceSkippedZeroDelta` event logs in real
-        time via `viem.watchContractEvent`.
+        feed scans the last ~1h of blocks on each chain via public RPC. 30s page cache.
       </p>
     </div>
   );
