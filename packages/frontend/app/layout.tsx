@@ -6,7 +6,7 @@ import { AmbientPetals } from "@/components/AmbientPetals";
 import { WalletProviders } from "@/components/WalletProviders";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://mirv.vercel.app"),
+  metadataBase: new URL("https://mirv-frontend.vercel.app"),
   title: {
     default: "mirv — cross-chain liquidity mirror",
     template: "%s · mirv",
@@ -29,7 +29,7 @@ export const metadata: Metadata = {
     title: "mirv — cross-chain liquidity mirror",
     description:
       "deposit usdc on base. agents move your money across base + ethereum. you keep 85% of the extra.",
-    url: "https://mirv.vercel.app",
+    url: "https://mirv-frontend.vercel.app",
     siteName: "mirv",
     locale: "en_US",
     type: "website",

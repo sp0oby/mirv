@@ -35,7 +35,7 @@ real depth ourselves at launch, then user deposits grow the pool.
 
 **Live now:**
 - Contracts on Base Sepolia + Ethereum Sepolia (rc6 candidate)
-- Frontend on Vercel (`mirv.vercel.app`)
+- Frontend on Vercel (`mirv-frontend.vercel.app`)
 - Cross-chain dispatch + Hyperlane delivery + V4 modify-liquidity all working end-to-end
 
 **Coming next:**
@@ -871,7 +871,7 @@ End-to-end pipeline validation (live txs):
 
 ### Frontend deployment
 
-Live at `mirv.vercel.app` (pulled from this repo's `main`). Built on every push.
+Live at `mirv-frontend.vercel.app` (pulled from this repo's `main`). Built on every push.
 Read-only pages talk to the public RPCs (`sepolia.base.org`,
 `ethereum-sepolia.publicnode.com`) — no env vars required, no API key in
 client bundle. Wallet pages use wagmi 2 + a custom Win95-styled RainbowKit

@@ -63,7 +63,7 @@ to mainnet equivalents on launch.
    - If `action=rebalance`: `[risk] status=green|yellow|red`
    - If risk green: `[coordinator] approved=true` and `dispatchRebalance tx: 0x…`
    - `[Cycle N] Done. maxImbalance=X.XX%`
-4. The dashboard at `mirv.vercel.app/dashboard` will start showing "last
+4. The dashboard at `mirv-frontend.vercel.app/dashboard` will start showing "last
    check-in" timestamps updating every cycle, and the activity feed will
    accumulate `RebalanceDispatched` events whenever the swarm decides to act.
 
@@ -89,8 +89,8 @@ directly.
 ## Watching it run
 
 - **Railway logs** — live stdout from the agent
-- **Frontend dashboard** — `mirv.vercel.app/dashboard` shows last check-in
-- **Frontend activity** — `mirv.vercel.app/activity` shows rebalances landing
+- **Frontend dashboard** — `mirv-frontend.vercel.app/dashboard` shows last check-in
+- **Frontend activity** — `mirv-frontend.vercel.app/activity` shows rebalances landing
 - **Block explorers** — every dispatch lands as a `RebalanceDispatched` event
   on the Base hook (or ETH hook for reverse-direction)
 

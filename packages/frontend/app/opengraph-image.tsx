@@ -86,7 +86,7 @@ export default async function OG() {
               background: "#aaf0d1",
             }}
           />
-          live on testnet · mirv.vercel.app
+          live on testnet · mirv-frontend.vercel.app
         </div>
       </div>
     ),
