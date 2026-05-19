@@ -588,20 +588,56 @@ proactively.
       `tickUpper`, relayer modifyLiquidity unwinds + re-adds at the new range
 - [ ] Fork test: simulate price drift, verify swarm recenters within N cycles
 
-### 8.5.4 Hook quoter interface for routers
+### 8.5.4 Hook quoter interface for routers 🟡 designed + in source, not yet deployed
 
 **Why:** This is what makes mirv ≠ "just another LP." A router calling
-`mirv.quoteEffectivePrice(...)` gets back an execution price that accounts
-for our cross-chain depth coordination. Nothing else exposes this.
+`mirv.quoteCrossChainPool(...)` gets back the cross-chain depth picture
+that accounts for our coordination across chains. Nothing else in V4 exposes this.
 
-- [ ] Design `IMirrorHookQuoter` interface — single view function returning
-      effective execution price + the depth-distribution breakdown
-- [ ] Implement on `MirrorHook`: read `localDepthUsd` + `sisterDepths` for
-      every enabled sister, compute the routing-optimal split
+**Current state (as of 2026-05-19):**
+
+✅ **Shipped in source code** — `packages/contracts/src/interfaces/IMirrorHookQuoter.sol`
+  defines the interface and the `CrossChainQuote` return struct.
+  Committed to main, CI will validate compile.
+✅ **Documented in `/docs`** — the V4 hook section on the frontend now
+  shows the quoter struct + a link to `ExampleRouterIntegration.sol`.
+✅ **Reference integration** — `packages/contracts/examples/ExampleRouterIntegration.sol`
+  shows two adopt-this patterns: `shouldRouteThroughMirv()` and `findDeepestChain()`.
+  Not deployed; it's reference code for integrators.
+❌ **NOT yet callable on the deployed contracts.** Base Sepolia + ETH Sepolia
+  still run rc6 bytecode from before this change. The quoter is in source,
+  ready for the next hook revision.
+
+**To actually make it callable from a deployed router**, deploy operation:
+
+- [ ] Re-mine a hook CREATE2 address — V4 requires specific flag bits in
+      the hook address; the existing one was carefully mined and changing
+      the contract bytecode changes the required address constraint
+- [ ] Redeploy MirrorHook on Base Sepolia + ETH Sepolia
+- [ ] Re-initialize both V4 pools with the new hook (pools are identified
+      by hook address; new hook = new poolId)
+- [ ] Migrate vault chain registry + relayer `authorizedSenders` to the
+      new hook addresses
+- [ ] Update env vars (`MIRROR_HOOK_BASE`, `MIRROR_HOOK_MAINNET`) and the
+      frontend's `ADDR.base.hook` + `ADDR.eth.hook` constants
+- [ ] Re-fund both hooks with ETH for Hyperlane dispatch fees
+- [ ] Smoke-test the new quoter on chain with `cast call`
+
+**Why we held this for now:** ~2–3 hour deploy operation; not done pre-meeting.
+Engineering preference: get the interface SHAPE right (via Uniswap feedback)
+before re-mining hook addresses, since address mining locks the bytecode.
+
+**Meeting framing:** "Interface is designed, implementation lives in our hook
+source, here's the reference integration. We held back from redeploying because
+we wanted the integration shape to be RIGHT before re-mining hook addresses.
+We'd love your feedback on the interface before next deploy."
+
+**Remaining work outside the deploy:**
+
 - [ ] Add fork tests proving quoter output matches actual cross-chain depth
-- [ ] Update `interfaces/IMirrorHook.sol` for integrators
-- [ ] Document the interface in `/docs` page on the frontend
 - [ ] Internal benchmark vs canonical Uniswap quote at various TVL ratios
+- [ ] Update `interfaces/IMirrorHook.sol` to optionally inherit the quoter
+      (so integrators only need one import)
 
 ### 8.5.5 Router + aggregator outreach
 
