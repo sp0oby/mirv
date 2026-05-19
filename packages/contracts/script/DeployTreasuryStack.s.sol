@@ -68,7 +68,7 @@ contract DeployTreasuryStack is Script {
         // ─── Step 1: deploy Timelock ────────────────────────────────────
         // Proposer + executor = safe. Admin = address(0) so even the deployer
         // can't bypass the timelock once deployed. This is irreversible —
-        // intentionally so. Operate the protocol only through the Safe → Timelock.
+        // intentionally so. Operate the protocol only through the Safe -> Timelock.
         address[] memory proposers = new address[](1);
         proposers[0] = safe;
         address[] memory executors = new address[](1);
@@ -85,17 +85,17 @@ contract DeployTreasuryStack is Script {
         // ─── Step 2: migrate ownership of every Ownable contract ────────
         // The current EOA owner transfers `owner()` to the Timelock.
         // After this, the only way to call onlyOwner functions is to:
-        //   Safe.execute() → Timelock.schedule(target, data) → wait 24h →
-        //   Safe.execute() → Timelock.execute(target, data) → target.fn()
+        //   Safe.execute() -> Timelock.schedule(target, data) -> wait 24h ->
+        //   Safe.execute() -> Timelock.execute(target, data) -> target.fn()
 
         MirrorHook(payable(hook)).transferOwnership(address(timelock));
-        console2.log("Hook ownership → Timelock");
+        console2.log("Hook ownership -> Timelock");
 
         MirrorFactory(factory).transferOwnership(address(timelock));
-        console2.log("Factory ownership → Timelock");
+        console2.log("Factory ownership -> Timelock");
 
         Treasury(payable(treasury)).transferOwnership(address(timelock));
-        console2.log("Treasury ownership → Timelock");
+        console2.log("Treasury ownership -> Timelock");
 
         // MirrorVault uses a separate `treasury` address (NOT Ownable's owner).
         // The vault has a 24h-timelocked setter for the treasury already
