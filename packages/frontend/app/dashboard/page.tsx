@@ -17,8 +17,8 @@ export default async function DashboardPage() {
 
   const tvlUsd       = state ? Number(formatUsdc(state.totalAssets).replace(/,/g, "")) : 0;
   const sharePrice   = state && state.totalSupply > 0n ? Number(state.totalAssets) / Number(state.totalSupply) : 1;
-  const baseDepthUsdc = state ? Number(state.baseDepth) / 1e18 : 0;
-  const ethDepthUsdc  = state ? Number(state.ethDepth)  / 1e18 : 0;
+  const baseAllocUsd = state ? Number(state.totalAssets - state.crossChain) / 1e6 : 0;
+  const ethAllocUsd  = state ? Number(state.crossChain) / 1e6 : 0;
   const baseAlloc    = state ? Number(state.baseAllocBps) / 100 : 0;
   const ethAlloc     = state ? Number(state.ethAllocBps)  / 100 : 0;
   const dispatches   = activity.filter((e) => e.kind === "dispatch" || e.kind === "execute" || e.kind === "skip").slice(0, 5);
@@ -103,28 +103,28 @@ export default async function DashboardPage() {
         <CycleCountdown />
       </section>
 
-      {/* ─── Per-chain depth ───────────────────────────────────────────── */}
+      {/* ─── Per-chain allocation ──────────────────────────────────────── */}
       <section className="mb-12">
         <h2 className="font-maru text-[20px] font-semibold text-ink mb-5">
-          ❀ how much liquidity is on each chain
+          ❀ how much usdc is on each chain
         </h2>
         <div className="space-y-3">
           {[
-            { chain: "Base",     depth: baseDepthUsdc, alloc: baseAlloc, color: "#ffd1dc" },
-            { chain: "Ethereum", depth: ethDepthUsdc,  alloc: ethAlloc,  color: "#bde0fe" },
+            { chain: "Base",     amount: baseAllocUsd, target: baseAlloc, color: "#ffd1dc" },
+            { chain: "Ethereum", amount: ethAllocUsd,  target: ethAlloc,  color: "#bde0fe" },
           ].map((c) => (
             <div key={c.chain} className="frame-outer p-5">
               <div className="flex items-center justify-between mb-2">
                 <span className="font-maru text-[16px] text-ink font-semibold">{c.chain}</span>
                 <span className="font-mono text-[13px] text-ink-soft">
-                  target {c.alloc.toFixed(0)}% · ${c.depth.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  target {c.target.toFixed(0)}% · ${c.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                 </span>
               </div>
               <div className="h-3 rounded-full overflow-hidden bg-paper-deep border border-ink-soft/40">
                 <div
                   className="h-full"
                   style={{
-                    width: `${Math.min(100, (c.depth / Math.max(baseDepthUsdc, ethDepthUsdc, 1)) * 100)}%`,
+                    width: `${Math.min(100, (c.amount / Math.max(baseAllocUsd, ethAllocUsd, 1)) * 100)}%`,
                     background: c.color,
                   }}
                 />
@@ -133,7 +133,7 @@ export default async function DashboardPage() {
           ))}
         </div>
         <p className="text-[12px] text-ink-faint mt-3">
-          the swarm shifts liquidity between chains when one side drifts more than 3% off target.
+          the swarm shifts usdc between chains when one side drifts more than 3% off target. testnet liquidity is small — mechanism validates, mainnet seeding will land actual depth.
         </p>
       </section>
 

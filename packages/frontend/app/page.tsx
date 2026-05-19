@@ -60,7 +60,7 @@ export default async function LandingPage() {
             className="stamp absolute -top-4 -left-6 text-[14px] px-3 py-1.5"
             style={{ transform: "rotate(-7deg)", color: "#d63b5e" }}
           >
-            audit candidate
+            live on testnet
           </div>
           <div
             className="stamp absolute bottom-8 -right-5 text-[14px] px-3 py-1.5"

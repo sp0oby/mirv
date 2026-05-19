@@ -42,16 +42,15 @@ export function ShellHeader() {
         <HeaderWalletButton />
       </div>
 
-      {/* live ticker — kept simple, no kaomoji parade */}
       <div className="mt-4 flex items-center gap-3 text-[13px] text-ink-soft">
         <span className="inline-flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full bg-mint-deep animate-heartbeat" />
-          swarm calm
+          live
         </span>
         <span className="text-ink-faint">·</span>
-        <span>last cycle 2m ago</span>
+        <span>base + ethereum testnet</span>
         <span className="text-ink-faint">·</span>
-        <span>2 chains live</span>
+        <span>reads refresh every 30s</span>
       </div>
     </header>
   );

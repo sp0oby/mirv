@@ -186,30 +186,44 @@ Hook addresses are mined with CREATE2 (`script/MineHookAddress.s.sol`) so the lo
 
 ## 7. User Experience
 
+The frontend is a Next.js 15 / React 19 / wagmi 2 / RainbowKit 2 app deployed
+on Vercel, with a kawaiicore design system (cream substrate, warm-mauve ink,
+Win95 chrome, framer-motion idle animations, a custom mascot named `miri`).
+Eight pages cover deposit / positions / withdraw / dashboard / activity /
+analytics / admin / home. Read-only pages use viem direct-RPC reads on
+server components with 30s revalidation; wallet-gated pages use wagmi hooks
+client-side.
+
 ### Deposit Flow
 
-1. Visit the mirv site, connect wallet (RainbowKit — supports Phantom, MetaMask, WalletConnect, etc.)
-2. Select pair (ETH/USDC default)
-3. Enter deposit amount → see real-time preview of mirrored allocation + projected extra APY
-4. Approve token + deposit on Base
-5. Receive `mirvETH-USDC` receipt tokens
+1. Visit the mirv site, connect wallet via the header button (MetaMask, Rabby,
+   Coinbase Wallet, or any injected wallet)
+2. Switch to Base Sepolia / Base if prompted
+3. Enter USDC amount → form previews allocation across Base + Ethereum
+4. Approve USDC → deposit
+5. Receive `mirvUSDC` shares; vault splits and CCTP-bridges the cross-chain
+   portion automatically
 
 ### Dashboard
 
-- Live mirrored depth visualization (three bars showing per-chain balance)
-- "Extra Yield Earned" counter (proof of value-add)
-- Agent activity log (transparent feed of every rebalance)
-- Performance chart: mirrored APY vs single-chain baseline
+- Total mirrored (live `totalAssets`)
+- Share price (live `totalAssets / totalSupply`)
+- Per-chain USDC allocation bars (local Base balance vs reported cross-chain)
+- System health strip — relayer gas balances, pause state, cooldown
+- Recent rebalances pulled from the last hour of `RebalanceDispatched` events
+
+### Activity Feed
+
+- Last hour of cross-chain events: rebalance started / delivered / no-change /
+  depth update / depth-update capped
+- Each row links to the source tx on basescan / etherscan
+- Refreshes every 30s, server-rendered (no per-user RPC spam)
 
 ### Withdraw
 
-- One click on Base
-- Cross-chain unwind handled automatically in ~2–5 minutes if needed
-
-### Marketing Lines
-- "Set it once. Earn on three chains."
-- "The smartest liquidity in DeFi — run by AI agents."
-- "Deeper liquidity. Higher yields. Zero effort."
+- Two modes: synchronous redeem if vault has enough local USDC, async
+  `requestWithdraw` queue if cross-chain unwind is needed
+- Async queue is cancellable after 24h if the agent fails to fulfill (R-5 escalation path)
 
 ## 8. Tech Stack
 
@@ -496,14 +510,14 @@ Percentages are real completion counts from `TODO.md` checkboxes.
 | Phase | Status | Description |
 |---|---|---|
 | 0 — Planning | **100%** ✅ | All decisions locked, memory + skills saved |
-| 1 — Contracts | **80%** 🟡 | 5 contracts shipped on Base Sepolia + ETH Sepolia at v4 iteration, 73 unit + 12 fork = 85 tests pass. Canonical pairId + chain registry + async withdrawal + CCTP integration + `handle()` symmetric notification all live. Slither/Mythril clean run pending. |
-| 2 — Agents | **60%** 🟡 | Core works (4 agents calling Claude, V4 TVL math proven). MonitorAgent count now N (2 at launch via env flag), 12 polish items remain (unit tests, memory/learning layer, optional Bankr) |
-| 3 — Frontend | **0%** ⚪ | Deferred until after testnet end-to-end validation |
-| 4 — Anvil Demo | **90%** ✅ | 3-chain orchestration + MockHyperlane works |
-| **5 — Testnet** | **80%** 🟢 | **Live on Base Sepolia + ETH Sepolia.** Canonical pairId, chain registry, CCTP-ready deposit, async withdrawal queue, bidirectional `handle()`. Agent loop + soak test pending. See addresses in §16. |
-| 6 — Audit | 0% ⚪ | Cantina + Slither + Mythril + bug bounty. Re-run static analysis on v4 bytecode. `BRIDGE-DESIGN.md` complete for review. |
+| 1 — Contracts | **95%** 🟢 | 5 contracts at rc6 on Base Sepolia + ETH Sepolia. 135 tests pass (105 unit/invariant + 30 fork). Canonical pairId, chain registry, async withdrawal, CCTP integration, bidirectional `handle()`, R-1..R-13 hardening, zero-delta short-circuit. Slither: 7 high/medium in-scope findings, all pre-existing v5 patterns. Mythril SWC-101 noise on Solidity 0.8+ triaged as false positives. |
+| 2 — Agents | **65%** 🟡 | Four-agent swarm (2 monitor + strategist + risk + coordinator) running on Claude via raw `@anthropic-ai/sdk`. Cross-chain dispatch via `dispatchRebalance` agent-callable path. Polish remaining: unit tests, persistent memory layer, x402 LLM payments. |
+| **3 — Frontend** | **80%** 🟢 | **Live on Vercel.** 8 pages (home / dashboard / deposit / positions / withdraw / activity / analytics / admin), wagmi 2 + RainbowKit 2 wallet pages, viem direct-RPC server reads for read-only pages with 30s revalidate. Kawaiicore design system, custom mascot, framer-motion idle. Remaining: `/docs` page for technical layer, `/about` long-form. |
+| 4 — Anvil Demo | **90%** ✅ | 3-chain orchestration + MockHyperlane works (kept for offline dev; testnet is now primary) |
+| **5 — Testnet** | **95%** 🟢 | Live + end-to-end validated on Base Sepolia + ETH Sepolia. rc6 cross-chain pipeline: dispatch → Hyperlane delivery → relayer execute with V4 `ModifyLiquidity` → `RebalanceExecuted`. Frontend reads real on-chain state. See addresses + tx receipts in §16. |
+| 6 — Audit | 0% ⚪ | External firm engagement gated on grant funding. Internal pass complete (135 tests, slither, mythril). `BRIDGE-DESIGN.md` + `audits/OPERATIONS.md` ready for review. |
 | 7 — Grant | **33%** 🟡 | `GRANT-APPLICATION.md` ready, submission pending |
-| 8 — Infra | 0% ⚪ | Alchemy / Anthropic / Railway / Gnosis Safes / x402 proxy |
+| 8 — Infra | **20%** 🟡 | Alchemy (live) / Anthropic (live, single key for now) / Vercel (live, frontend) / Treasury Safe (planned). x402 LLM payment integration is the next big infra item (see roadmap below). |
 | 9 — Mainnet | 0% ⚪ | After audit. Launch: Base + Ethereum. BNB enables post-launch via single admin tx once CCTP-BNB + V4-BNB ship. |
 | 10 — Public | 0% ⚪ | After mainnet + DefiLlama + Zapper + Bankr Skill |
 | 11 — $MIRROR | **29%** ⚪ | Planning done, build deferred until TVL proven |
@@ -519,8 +533,45 @@ Percentages are real completion counts from `TODO.md` checkboxes.
 - **Solidity:** all 5 contracts deploy on real Base V4 PoolManager (fork) with correct CREATE2-mined hook addresses. afterSwap / afterAddLiquidity / afterRemoveLiquidity callbacks all fire on real V4 swaps via fork tests.
 - **Agents:** Claude API integration via raw `@anthropic-ai/sdk` (bypasses a langchain default-args bug). Multi-round tool calling works. 3 parallel monitors per cycle.
 - **TVL math:** verified against the actual Ethereum mainnet ETH/USDC V4 pool (read $72k TVL) — same formula works on any chain.
-- **Cross-chain:** MockHyperlaneMailbox delivers messages between Anvil forks; production swap to real Hyperlane mailboxes is a single env-var change.
-- **Vault lifecycle:** USDC deposit → cross-chain yield report → 15% performance fee harvest → fee shares minted to treasury. All math verified.
+- **Cross-chain:** rc6 pipeline validated end-to-end on Sepolia testnet — Base hook `dispatchRebalance` → Hyperlane delivery → ETH Relayer execute with V4 `ModifyLiquidity` → `RebalanceExecuted` event.
+- **Vault lifecycle:** USDC deposit → CCTP-burn proportional cross-chain → mirvUSDC shares minted → 15% performance fee harvest math verified.
+- **Frontend ↔ chain:** dashboard + activity feed read real rc6 contract state on every render (cached 30s).
+
+### Forward roadmap
+
+Items already on the board but not yet started:
+
+**x402 LLM payments from the vault** — instead of paying for the swarm's Claude API
+calls from a centralized API key, the agent coordinator will pay per-call via
+the [x402 protocol](https://x402.org) (HTTP 402 micropayments). The vault funds
+a small allowance into an x402-paymaster that the agent process draws against
+to pay Anthropic. This makes mirv genuinely autonomous: there is no key-holder
+who can pull the plug on the swarm by revoking an API key, and the cost of
+running the agents is on-chain visible. Estimated effort: ~2 weeks once
+x402 production endpoints stabilize.
+
+**Persistent agent memory layer** — currently the agent state is per-cycle.
+A small Postgres or Durable Object layer behind the agent would let it
+remember prior rebalance reasoning, build up a model of which cycles produced
+the most extra yield, and avoid repeating mistakes. Optional Redis as a hot
+cache. ~1 week.
+
+**`/docs` page for technical readers** — the user-facing frontend stripped
+all the V4 hook / Hyperlane / CCTP language to keep depositor copy clean.
+A `/docs` page links back to the technical depth (contract addresses, the
+hook architecture, the rebalance flow, the R-1..R-13 safety set) for
+integrators and security researchers. ~2 days.
+
+**`/about` long-form** — protocol explanation that didn't fit on the landing.
+The kind of page someone shares to convince a friend to deposit. ~2 days.
+
+**Multi-pair support** — currently mirv is single-pair (USDC/WETH). The
+Factory + canonical pairId design supports additional pairs (USDC/cbBTC,
+USDC/WBTC, etc.) — each new pair is one factory call + one wire-sisters
+script run. Gated on pair-specific oracle config.
+
+**BNB enablement** — designed-in but waiting on CCTP-BNB + V4-BNB to ship.
+Single admin tx flips the chain registry when both are live.
 
 ## 16. Live Testnet Deployment (rc5 / rc6)
 
@@ -571,6 +622,18 @@ End-to-end pipeline validation (live txs):
 | Base → ETH agent dispatch (LP execute) | `0x8a8841d1…000f` (Base) | `0x6e3bb567…7381` (ETH) — `RebalanceExecuted` + V4 modify + token transfers |
 | ETH → Base V4-callback notification | (Hyperlane delivered ETH→Base) | `0x49cb5e21…6e54` (Base) — `SisterDepthReported` + `SisterNotificationReceived` |
 | Base → ETH zero-delta short-circuit (rc6) | `0x64a22b1c…4762` (Base) | `0xeee761e9…5f13` (ETH) — `RebalanceSkippedZeroDelta`, no V4 modify, 154k gas |
+| First real user-deposit (20 USDC seed) | `0x4006ec38…428eb` (Base) — `Deposit` + `CctpBridgeSent` (8 USDC) | (CCTP attestation ~20 min) |
+| Agent reports cross-chain in-flight | `0xc33eb2fe…6120` (Base) — `CrossChainAssetsUpdated(0 → 8 USDC)` | — |
+| Demo seeding rebalance (Base→ETH) | `0xca54e2df…6ef5` (Base) — `RebalanceDispatched` | `0x8a050336…959a` (ETH) — `RebalanceExecuted` |
+| Demo seeding rebalance (ETH→Base) | `0x18e86521…2963` (ETH) — `RebalanceDispatched` | (Hyperlane delivery in flight) |
+
+### Frontend deployment
+
+Live at `mirv.vercel.app` (pulled from this repo's `main`). Built on every push.
+Read-only pages talk to the public RPCs (`sepolia.base.org`,
+`ethereum-sepolia.publicnode.com`) — no env vars required, no API key in
+client bundle. Wallet pages use wagmi 2 + a custom Win95-styled RainbowKit
+button.
 
 Earlier iterations (v1–v4, v5 with rc1-era contracts, and the abandoned rc5
 Relayer at `0x72e2538a…0155`) are stranded on testnet; their final balances
@@ -587,11 +650,16 @@ tags for the full version history.
 - **Uniswap V4** — https://docs.uniswap.org/contracts/v4/overview
 - **OpenZeppelin uniswap-hooks** — https://github.com/OpenZeppelin/uniswap-hooks
 - **Hyperlane** — https://docs.hyperlane.xyz
+- **Circle CCTP** — https://developers.circle.com/stablecoins/cctp
 - **Pyth Network** — https://docs.pyth.network
 - **Chainlink Price Feeds** — https://docs.chain.link/data-feeds
 - **LangGraph** — https://langchain-ai.github.io/langgraphjs/
 - **Anthropic Claude API** — https://docs.anthropic.com
+- **x402 (HTTP 402 micropayments)** — https://x402.org · used for the planned vault-funded LLM payment path
 - **viem + wagmi** — https://viem.sh / https://wagmi.sh
+- **RainbowKit** — https://rainbowkit.com
+- **Next.js** — https://nextjs.org
+- **Vercel** — https://vercel.com · frontend deployment
 - **ETHSKILLS** — https://ethskills.com (Solidity security, V4 building blocks, Foundry testing skill modules)
 
 ### Project Memory
