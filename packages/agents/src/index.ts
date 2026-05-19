@@ -9,6 +9,7 @@ if ((process.stderr as any)._handle?.setBlocking) (process.stderr as any)._handl
 
 import { buildGraph }      from "./graph.js";
 import { disconnectRedis } from "./tools/redis.js";
+import { startHeartbeatServer } from "./heartbeat.js";
 import type { MirrorState } from "./state.js";
 
 const CYCLE_INTERVAL_MS = 45_000; // 45 seconds between cycles
@@ -18,17 +19,29 @@ const CYCLE_INTERVAL_MS = 45_000; // 45 seconds between cycles
 // Unset or 0 = run indefinitely (production behavior).
 const MAX_CYCLES = Number(process.env.MAX_CYCLES ?? "0");
 
+// HTTP heartbeat — Railway / Fly inject $PORT; default 8080 for local runs.
+// /health returns 503 if no cycle has landed in 3 minutes. External monitors
+// (Better Stack, UptimeRobot) page on that.
+const HEARTBEAT_PORT = Number(process.env.PORT ?? "8080");
+
 async function main() {
   console.log("=== mirv agent swarm starting ===");
   console.log(`Cycle interval: ${CYCLE_INTERVAL_MS / 1000}s`);
   if (MAX_CYCLES > 0) console.log(`Cycle cap:      ${MAX_CYCLES} (will exit after)`);
 
+  const heartbeatServer = startHeartbeatServer(HEARTBEAT_PORT);
   const graph  = buildGraph();
   let   cycle  = 0;
 
-  // Graceful shutdown
-  process.on("SIGINT",  () => { console.log("\nShutting down..."); disconnectRedis().then(() => process.exit(0)); });
-  process.on("SIGTERM", () => { disconnectRedis().then(() => process.exit(0)); });
+  // Graceful shutdown — close heartbeat server first so Railway sees clean exit
+  const shutdown = async () => {
+    console.log("\nShutting down...");
+    heartbeatServer.close();
+    await disconnectRedis();
+    process.exit(0);
+  };
+  process.on("SIGINT",  shutdown);
+  process.on("SIGTERM", shutdown);
 
   while (true) {
     cycle++;

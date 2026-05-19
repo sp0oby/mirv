@@ -5,6 +5,7 @@ import { runRebalanceAgent } from "./agents/rebalance.js";
 import { runCoordinatorAgent } from "./agents/coordinator.js";
 import { runRiskAgent } from "./agents/risk.js";
 import { appendCycleHistory } from "./tools/redis.js";
+import { recordHeartbeat } from "./heartbeat.js";
 
 // ─── Node wrappers ────────────────────────────────────────────────────────────
 
@@ -56,6 +57,15 @@ async function recordCycle(state: MirrorState): Promise<Partial<MirrorState>> {
     actionTaken:  state.executionResult?.success ?? false,
     extraYieldUsd: state.rebalanceProposal?.expectedExtraYieldUsd,
   }).catch(() => {});
+
+  recordHeartbeat({
+    cycle:           state.cycle,
+    maxImbalancePct: maxImbalance,
+    actionTaken:     state.executionResult?.success ?? false,
+    extraYieldUsd:   state.rebalanceProposal?.expectedExtraYieldUsd,
+    lastTxHash:      state.executionResult?.txHash,
+    errors:          state.errors?.length ?? 0,
+  });
 
   console.log(`[Cycle ${state.cycle}] Done. maxImbalance=${maxImbalance.toFixed(2)}%`);
   return {};

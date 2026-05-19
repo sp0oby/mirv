@@ -93,3 +93,39 @@ directly.
 - **Frontend activity** — `mirv.vercel.app/activity` shows rebalances landing
 - **Block explorers** — every dispatch lands as a `RebalanceDispatched` event
   on the Base hook (or ETH hook for reverse-direction)
+
+## Heartbeat endpoint
+
+The agent serves a small HTTP heartbeat on `$PORT` (Railway sets this).
+Two routes:
+
+- `GET /` — JSON snapshot: cycle number, last timestamp, max imbalance, last
+  tx hash if a rebalance landed. Good for debugging.
+- `GET /health` — `200 ok` if last cycle was within 3 minutes; `503 stale`
+  otherwise. Returns `200 booting` for the first 2 min after process start.
+
+To expose this publicly on Railway:
+
+1. Open the service in Railway → **Settings → Networking** → **Generate Domain**
+2. You'll get a URL like `mirv-agent.up.railway.app` — that's your heartbeat URL.
+3. Test it: `curl https://mirv-agent.up.railway.app/health` should return
+   `{"status":"ok","ageMs":...}` once the first cycle lands.
+
+## Wiring up Better Stack uptime alerts
+
+Free tier covers 10 monitors at 3-min intervals. About 60 seconds of setup:
+
+1. Sign up at https://betterstack.com → **Uptime** → **Create monitor**
+2. URL: your Railway domain + `/health` (e.g. `https://mirv-agent.up.railway.app/health`)
+3. Type: `HTTP/HTTPS`, expected status `200`, check every 3 minutes
+4. Alert via email, Slack, SMS, or webhook — your choice.
+5. Save. Better Stack will start pinging immediately.
+
+The alert fires if `/health` returns 503 for two consecutive checks (~6 min).
+That means the swarm hasn't completed a cycle in 3+ minutes, which is the
+threshold where something's actually wrong rather than just slow.
+
+Alternative free options:
+- **UptimeRobot** — 50 monitors at 5-min intervals
+- **Tenderly** — alerts on specific contract events (e.g. no `RebalanceDispatched`
+  for 24h), more sophisticated but more setup
