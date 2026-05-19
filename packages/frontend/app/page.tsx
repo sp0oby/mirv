@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Mascot } from "@/components/Mascot";
-import { readDashboardState, formatUsdc, timeAgo } from "@/lib/contracts";
+import { readDashboardState, formatUsdc, timeAgo, deriveSwarmStatus } from "@/lib/contracts";
 
 export const revalidate = 30;
 
@@ -10,6 +10,11 @@ export default async function LandingPage() {
 
   const tvlUsd = state ? Number(formatUsdc(state.totalAssets).replace(/,/g, "")) : null;
   const cycleAgo = state && state.lastUpdate > 0n ? timeAgo(state.lastUpdate) : null;
+  const swarm = deriveSwarmStatus({
+    paused: state?.paused,
+    lastUpdate: state?.lastUpdate,
+    rpcReachable: state != null,
+  });
 
   return (
     <div className="pt-4">
@@ -90,8 +95,14 @@ export default async function LandingPage() {
             ✦ swarm
           </p>
           <p className="pixel text-[40px] text-ink leading-tight inline-flex items-center gap-2">
-            {state?.paused ? "paused" : "calm"}
-            <span className={state?.paused ? "w-3 h-3 rounded-full bg-pink-hot inline-block" : "w-3 h-3 rounded-full bg-mint-deep animate-heartbeat inline-block"} />
+            {swarm.status}
+            <span className={
+              swarm.status === "paused"  ? "w-3 h-3 rounded-full bg-pink-hot inline-block" :
+              swarm.status === "idle"    ? "w-3 h-3 rounded-full bg-marigold inline-block" :
+              swarm.status === "offline" ? "w-3 h-3 rounded-full bg-ink-faint inline-block" :
+              swarm.status === "active"  ? "w-3 h-3 rounded-full bg-mint-deep animate-heartbeat inline-block" :
+                                           "w-3 h-3 rounded-full bg-mint-deep inline-block"
+            } />
           </p>
           <p className="text-[13px] text-ink-soft mt-1">
             {cycleAgo ? `last check-in ${cycleAgo}` : "waiting for first check-in"}

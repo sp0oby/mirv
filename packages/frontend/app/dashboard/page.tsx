@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { CycleCountdown } from "@/components/CycleCountdown";
-import { readDashboardState, readRecentActivity, formatUsdc, timeAgo, shortTx, ADDR } from "@/lib/contracts";
+import { readDashboardState, readRecentActivity, formatUsdc, timeAgo, shortTx, ADDR, deriveSwarmStatus } from "@/lib/contracts";
 
 export const revalidate = 30;
 
@@ -27,6 +27,11 @@ export default async function DashboardPage() {
   const baseAlloc    = state ? Number(state.baseAllocBps) / 100 : 0;
   const ethAlloc     = state ? Number(state.ethAllocBps)  / 100 : 0;
   const dispatches   = activity.filter((e) => e.kind === "dispatch" || e.kind === "execute" || e.kind === "skip").slice(0, 5);
+  const swarm        = deriveSwarmStatus({
+    paused: state?.paused,
+    lastUpdate: state?.lastUpdate,
+    rpcReachable: state != null,
+  });
 
   return (
     <div className="pt-4">
@@ -77,8 +82,14 @@ export default async function DashboardPage() {
             ✦ swarm
           </p>
           <p className="pixel text-[44px] text-ink leading-tight inline-flex items-center gap-2">
-            {state?.paused ? "paused" : "calm"}
-            <span className={state?.paused ? "w-3 h-3 rounded-full bg-pink-hot inline-block" : "w-3 h-3 rounded-full bg-mint-deep animate-heartbeat inline-block"} />
+            {swarm.status}
+            <span className={
+              swarm.status === "paused"  ? "w-3 h-3 rounded-full bg-pink-hot inline-block" :
+              swarm.status === "idle"    ? "w-3 h-3 rounded-full bg-marigold inline-block" :
+              swarm.status === "offline" ? "w-3 h-3 rounded-full bg-ink-faint inline-block" :
+              swarm.status === "active"  ? "w-3 h-3 rounded-full bg-mint-deep animate-heartbeat inline-block" :
+                                           "w-3 h-3 rounded-full bg-mint-deep inline-block"
+            } />
           </p>
           <p className="text-[13px] text-ink-soft mt-1">
             {state && state.lastUpdate > 0n ? `last check-in ${timeAgo(state.lastUpdate)}` : "waiting for first check-in"}

@@ -251,3 +251,22 @@ export function timeAgo(secondsTimestamp: bigint | number): string {
   if (ago < 86400) return `${Math.floor(ago / 3600)}h ago`;
   return `${Math.floor(ago / 86400)}d ago`;
 }
+
+// Shared swarm-status derivation. Used by the header poll, the home page card,
+// and the dashboard card so all three agree at any given moment.
+export type SwarmStatusLabel = "active" | "calm" | "idle" | "paused" | "offline";
+
+export function deriveSwarmStatus(opts: {
+  paused?: boolean;
+  lastUpdate?: bigint | number;
+  rpcReachable?: boolean;
+}): { status: SwarmStatusLabel; ageSeconds: number | null } {
+  if (opts.rpcReachable === false) return { status: "offline", ageSeconds: null };
+  if (opts.paused === true) return { status: "paused", ageSeconds: null };
+  const ts = typeof opts.lastUpdate === "bigint" ? Number(opts.lastUpdate) : (opts.lastUpdate ?? 0);
+  if (!ts) return { status: "idle", ageSeconds: null };
+  const age = Math.floor(Date.now() / 1000) - ts;
+  if (age < 60)  return { status: "active", ageSeconds: age };
+  if (age < 600) return { status: "calm",   ageSeconds: age };
+  return { status: "idle", ageSeconds: age };
+}

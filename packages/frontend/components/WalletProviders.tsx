@@ -41,14 +41,18 @@ const connectors = connectorsForWallets(
   }
 );
 
+// Explicit RPC URLs — viem's default for mainnet is eth.merkle.io, which
+// intermittently fails (POST eth.merkle.io ERR_FAILED in console). Use known
+// stable public endpoints. Mainnet RPC is still needed for ENS resolution
+// even though the protocol only operates on Sepolia chains today.
 const config = createConfig({
   connectors,
   chains: [baseSepolia, sepolia, base, mainnet],
   transports: {
-    [baseSepolia.id]: http(),
-    [sepolia.id]:     http(),
-    [base.id]:        http(),
-    [mainnet.id]:     http(),
+    [baseSepolia.id]: http("https://sepolia.base.org"),
+    [sepolia.id]:     http("https://ethereum-sepolia.publicnode.com"),
+    [base.id]:        http("https://mainnet.base.org"),
+    [mainnet.id]:     http("https://ethereum.publicnode.com"),
   },
   ssr: false, // explicit — we only mount client-side via dynamic()
 });
