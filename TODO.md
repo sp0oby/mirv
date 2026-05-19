@@ -684,18 +684,29 @@ the integrations above land so we audit close-to-final bytecode.
 - [ ] Engagement starts ~4 weeks before target mainnet date
 - [ ] Bug bounty live on Cantina or Immunefi at audit completion
 
-### 8.5.8 Treasury multisig + governance
+### 8.5.8 Treasury multisig + governance 🟡 migration script shipped, awaiting Safe + run
 
 **Why:** Single-EOA treasury is fine for testnet, unacceptable for mainnet.
 Wire up the existing 24h `TREASURY_TIMELOCK_DELAY` to a real timelock.
 
 - [ ] Deploy Gnosis Safe (2-of-3 or 3-of-5 — decide composition)
-- [ ] Deploy OZ Timelock with 24h delay
-- [ ] Treasury Safe owns the Timelock; Timelock owns the protocol's setter functions
-- [ ] Run `setTreasury(timelock)` on Vault to migrate authority
-- [ ] Run `setOwner(timelock)` on Hook + Factory + Relayer
-- [ ] Verify on-chain: every privileged role now points at the Timelock
-- [ ] Document the upgrade path + emergency stop procedure
+- [x] Deploy script for OZ Timelock with 24h delay — `script/DeployTreasuryStack.s.sol`
+- [x] Script: Timelock proposer + executor = Safe, admin = address(0)
+      (no upgrade backdoor; Safe is the only path to call onlyOwner)
+- [x] Script: migrate Hook + Factory + Treasury ownership to the Timelock
+- [x] Script: call Vault.proposeTreasury(Safe) (24h R-5 timelock kicks in; executeTreasury() after)
+- [x] Script: revert-loud verification of every transferred role at the end
+      (incomplete migration = failed migration; impossible to ship half-migrated)
+- [ ] Add `Relayer.transferOwnership(timelock)` to the script once the
+      mainnet Relayer is deployed (currently commented as a TODO inline)
+- [ ] Document the upgrade path + emergency stop procedure in `audits/OPERATIONS.md`
+- [ ] Run on testnet first as a rehearsal (cost: small testnet ETH for gas)
+- [ ] Run on mainnet at launch — one `forge script ... --broadcast --slow`
+
+**Operational pattern after migration:** all `onlyOwner` calls require:
+1. Safe `execute()` → `Timelock.schedule(target, data, predecessor=0, salt, delay=24h)`
+2. Wait 24h
+3. Safe `execute()` → `Timelock.execute(target, data, predecessor=0, salt)`
 
 ### Order of operations
 
