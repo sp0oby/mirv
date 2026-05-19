@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Mascot } from "./Mascot";
+import { HeaderWalletButton } from "./HeaderWalletButton";
 
 const NAV = [
   { href: "/",          label: "home" },
@@ -38,10 +39,7 @@ export function ShellHeader() {
           ))}
         </nav>
 
-        {/* connect placeholder — wallet wiring added once deposit route lands */}
-        <button className="btn-win95 btn-win95-secondary text-[13px]">
-          connect wallet
-        </button>
+        <HeaderWalletButton />
       </div>
 
       {/* live ticker — kept simple, no kaomoji parade */}

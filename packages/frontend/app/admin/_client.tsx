@@ -3,7 +3,6 @@
 import { useAccount, useReadContract, useChainId } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { baseSepolia } from "wagmi/chains";
-import { WalletProviders } from "@/components/WalletProviders";
 
 const MIRROR_VAULT_BASE = "0x062b9E547689D53D9c5b059215ED967a9ceAf37b" as const;
 const MIRROR_HOOK_BASE  = "0xA059C8544E046F29C5c2A9f0dE6314964926c540" as const;
@@ -31,11 +30,7 @@ const HOOK_VIEW_ABI = [
 ] as const;
 
 export default function AdminClient() {
-  return (
-    <WalletProviders>
-      <AdminContent />
-    </WalletProviders>
-  );
+  return <AdminContent />;
 }
 
 function AdminContent() {

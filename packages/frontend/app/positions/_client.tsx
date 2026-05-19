@@ -5,7 +5,6 @@ import { useAccount, useReadContract, useChainId } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { baseSepolia } from "wagmi/chains";
 import { formatUnits } from "viem";
-import { WalletProviders } from "@/components/WalletProviders";
 
 const MIRROR_VAULT_BASE = "0x062b9E547689D53D9c5b059215ED967a9ceAf37b" as const;
 
@@ -17,11 +16,7 @@ const VAULT_ABI = [
 ] as const;
 
 export default function PositionsClient() {
-  return (
-    <WalletProviders>
-      <PositionsContent />
-    </WalletProviders>
-  );
+  return <PositionsContent />;
 }
 
 function PositionsContent() {

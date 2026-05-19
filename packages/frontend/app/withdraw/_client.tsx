@@ -5,7 +5,6 @@ import { useAccount, useReadContract, useWriteContract, useChainId } from "wagmi
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { baseSepolia } from "wagmi/chains";
 import { parseUnits, erc20Abi, formatUnits } from "viem";
-import { WalletProviders } from "@/components/WalletProviders";
 
 const USDC_BASE_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as const;
 const MIRROR_VAULT_BASE = "0x062b9E547689D53D9c5b059215ED967a9ceAf37b" as const;
@@ -33,11 +32,7 @@ const VAULT_ABI = [
 ] as const;
 
 export default function WithdrawClient() {
-  return (
-    <WalletProviders>
-      <WithdrawContent />
-    </WalletProviders>
-  );
+  return <WithdrawContent />;
 }
 
 function WithdrawContent() {
