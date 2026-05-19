@@ -4,5 +4,8 @@
   "installCommand": "cd ../.. && yarn install --frozen-lockfile",
   "buildCommand": "cd ../.. && yarn workspace @mirror/frontend build",
   "outputDirectory": ".next",
-  "regions": ["iad1"]
+  "regions": [
+    "iad1"
+  ],
+  "_note": "monorepo + yarn workspaces; install hoists deps, build runs the @mirror/frontend workspace."
 }
