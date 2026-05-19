@@ -1,8 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "buildCommand": "cd ../.. && yarn install --frozen-lockfile && yarn workspace @mirror/frontend build",
-  "installCommand": "echo 'install handled by buildCommand'",
+  "installCommand": "cd ../.. && yarn install --frozen-lockfile",
+  "buildCommand": "cd ../.. && yarn workspace @mirror/frontend build",
   "outputDirectory": ".next",
   "regions": ["iad1"]
 }
