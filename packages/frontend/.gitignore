@@ -1,0 +1,19 @@
+# Next.js
+.next/
+out/
+
+# Local-only parking directory (used when wallet pages can't compile on
+# resource-constrained machines; Vercel builds the wallet pages fine).
+.parked/
+
+# Node
+node_modules/
+*.log
+.env*.local
+
+# IDE
+.vscode/
+.idea/
+
+# Vercel
+.vercel
