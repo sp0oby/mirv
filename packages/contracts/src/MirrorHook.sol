@@ -15,6 +15,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IMailbox, IMessageRecipient} from "./interfaces/IHyperlane.sol";
 import {IPyth} from "./interfaces/IPyth.sol";
 import {AggregatorV3Interface} from "./interfaces/IChainlink.sol";
+import {IMirrorHookQuoter} from "./interfaces/IMirrorHookQuoter.sol";
 
 /// @title MirrorHook
 /// @notice Uniswap V4 hook attached to every sister pool in the mirv protocol.
@@ -26,7 +27,7 @@ import {AggregatorV3Interface} from "./interfaces/IChainlink.sol";
 ///      getHookPermissions(). Deploy with CREATE2. See script/MineHookAddress.s.sol.
 ///
 /// @dev Immutable — no proxy. Circuit breaker via Pausable. RiskAgent calls pause().
-contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRecipient {
+contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRecipient, IMirrorHookQuoter {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
 
@@ -538,6 +539,49 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
         if (block.timestamp - updatedAt > CHAINLINK_STALENESS) return (false, 0);
         if (answer <= 0) return (false, 0);
         return (true, uint256(answer) * 10 ** (18 - chainlinkFeedDecimals));
+    }
+
+    // ─── IMirrorHookQuoter — cross-chain depth primitive for routers ─────────
+
+    /// @notice Returns the cross-chain depth quote for a V4 pool, including
+    ///         per-sister-chain depth and the relative-advantage ratio that
+    ///         tells a router whether mirv's coordinated depth beats a
+    ///         single-chain quote. See `IMirrorHookQuoter.CrossChainQuote`
+    ///         for field semantics.
+    /// @dev    View only; safe for any router to call in its quote path.
+    ///         ~10k gas at 0 sisters, +~2k per sister for the storage reads.
+    function quoteCrossChainPool(bytes32 poolId) external view returns (CrossChainQuote memory q) {
+        q.localDepthUsd = localDepthUsd[PoolId.wrap(poolId)];
+
+        uint256 len = sisterDomains.length;
+        q.sisterChainsCount = len;
+        q.sisterDepthsUsd  = new uint256[](len);
+        q.sisterDomainIds  = new uint32[](len);
+
+        uint256 bestSisterDepth = 0;
+        uint256 total = q.localDepthUsd;
+        for (uint256 i; i < len; ++i) {
+            uint32 dom = sisterDomains[i].domainId;
+            uint256 depth = sisterDepths[dom][canonicalPairId];
+            q.sisterDomainIds[i] = dom;
+            q.sisterDepthsUsd[i] = depth;
+            total += depth;
+            if (depth > bestSisterDepth) bestSisterDepth = depth;
+        }
+        q.totalCrossChainDepthUsd = total;
+
+        // crossChainAdvantageBps: localDepth × MAX_BPS / max(1, bestSister).
+        // Above MAX_BPS means we're deeper here; below means a sister is deeper
+        // and the router might want to consider a cross-chain route.
+        // No sisters configured → trivially MAX_BPS (we're "infinitely deep"
+        // relative to a non-existent reference).
+        q.crossChainAdvantageBps = bestSisterDepth == 0
+            ? MAX_BPS
+            : (q.localDepthUsd * MAX_BPS) / bestSisterDepth;
+
+        // Reliable iff not paused. Future versions may also check per-sister
+        // report staleness once we add a timestamp tracker.
+        q.reliable = !paused();
     }
 
     // ─── Admin ───────────────────────────────────────────────────────────────
