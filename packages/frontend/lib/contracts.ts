@@ -7,7 +7,7 @@
 // on each page handle freshness — a single user load triggers one RPC,
 // subsequent loads within the revalidate window serve cached HTML.
 
-import { createPublicClient, http, parseAbi, type Address, type PublicClient } from "viem";
+import { createPublicClient, http, parseAbi, type Address } from "viem";
 import { baseSepolia, sepolia } from "viem/chains";
 import { keccak256, encodeAbiParameters, parseAbiParameters } from "viem";
 
@@ -41,11 +41,14 @@ export const CANONICAL_PAIR_ID =
   "0x7a00c543412ae44415418950dc1ea26ae8977c50cbcec8035a5d99a911085b04" as `0x${string}`;
 
 // ─── Public clients (one per chain) ───────────────────────────────────────
-export const baseClient: PublicClient = createPublicClient({
+// No explicit PublicClient annotation — viem's generic default doesn't
+// accept chain-specific transaction unions (baseSepolia / sepolia carry
+// OP-stack + eth tx types). Let TS infer the precise client type.
+export const baseClient = createPublicClient({
   chain: baseSepolia,
   transport: http(ADDR.base.rpc),
 });
-export const ethClient: PublicClient = createPublicClient({
+export const ethClient = createPublicClient({
   chain: sepolia,
   transport: http(ADDR.eth.rpc),
 });
