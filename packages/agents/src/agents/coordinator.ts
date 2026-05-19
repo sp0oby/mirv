@@ -1,6 +1,6 @@
 import {
   createPublicClient, createWalletClient, http,
-  parseAbi, encodeAbiParameters, parseAbiParameters,
+  parseAbi,
   type Address,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -10,7 +10,7 @@ import { chainFor } from "../chains.js";
 import type { MirrorState, CoordinatorDecision } from "../state.js";
 
 const mirrorHookAbi = parseAbi([
-  "function dispatchRebalance(bytes32 pairId, int128 deltaToken0, int128 deltaToken1, uint24 newFee, int24 tickLower, int24 tickUpper) external payable",
+  "function dispatchRebalance(int128 deltaToken0, int128 deltaToken1, uint24 newFee, int24 tickLower, int24 tickUpper) external payable",
 ]);
 
 function normalizePrivateKey(pk: string | undefined): `0x${string}` {
@@ -89,18 +89,15 @@ async function _executeOnChain(
     const publicClient = createPublicClient({ chain: baseChain, transport: http(process.env.ALCHEMY_BASE_URL) });
     const walletClient = createWalletClient({ account, chain: baseChain, transport: http(process.env.ALCHEMY_BASE_URL) });
 
-    const pairId = encodeAbiParameters(
-      parseAbiParameters("bytes32"),
-      [("0x" + "0".repeat(64)) as `0x${string}`]
-    );
-
+    // dispatchRebalance uses the hook's canonicalPairId internally — no pairId arg.
+    // try/catch wrapping inside _dispatchToAllSisters makes the mailbox call
+    // gas-hungry; raise the simulated gas budget so it doesn't OOG on broadcast.
     const { request } = await publicClient.simulateContract({
       account,
       address: hookAddress,
       abi: mirrorHookAbi,
       functionName: "dispatchRebalance",
       args: [
-        pairId as unknown as `0x${string}`,
         BigInt(proposal.deltaToken0 ?? "0"),
         BigInt(proposal.deltaToken1 ?? "0"),
         proposal.newFee ?? 3000,
@@ -108,6 +105,7 @@ async function _executeOnChain(
         proposal.newTickUpper ?? 60,
       ],
       value: 0n,
+      gas: 1_000_000n,
     });
 
     const txHash = await walletClient.writeContract(request);
