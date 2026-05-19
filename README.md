@@ -659,10 +659,33 @@ integrators and security researchers. ~2 days.
 **`/about` long-form** — protocol explanation that didn't fit on the landing.
 The kind of page someone shares to convince a friend to deposit. ~2 days.
 
-**Multi-pair support** — currently mirv is single-pair (USDC/WETH). The
-Factory + canonical pairId design supports additional pairs (USDC/cbBTC,
-USDC/WBTC, etc.) — each new pair is one factory call + one wire-sisters
-script run. Gated on pair-specific oracle config.
+**Multi-pair support** — currently mirv is single-pair (USDC/WETH on Base
+and Ethereum). The architecture is pair-agnostic: `MirrorFactory` deploys
+a fresh `{vault, hook, relayer}` triple per pair, the hook's
+`canonicalPairId = keccak256(currency0, currency1, fee, tickSpacing)`
+works for any V4 pool, and the swarm's rebalance logic doesn't care what's
+underneath the LP.
+
+What changes per pair:
+
+| Component | USDC/WETH (today) | USDC/cbBTC (example) | USDT/WETH (example) |
+|---|---|---|---|
+| Vault asset | USDC | USDC | USDT |
+| Bridge | Circle CCTP | Circle CCTP | Hyperlane warp route |
+| Oracle | ETH/USD (Pyth + Chainlink) | BTC/USD (Pyth + Chainlink) | ETH/USD (Pyth + Chainlink) |
+| Per-pair deploy | — | 1 factory call + wire-sisters | 1 factory call + warp wiring + wire-sisters |
+
+USDC is uniquely easy because Circle ships canonical CCTP — burn on chain A,
+mint on chain B with attestation. For non-USDC assets we'd use Hyperlane
+warp routes (the chain registry already has `warpRecipient` + `warpRouter`
+slots prepared, just not wired). Volatile pairs additionally need the price
+feed to exist on both chains (Pyth + Chainlink for the dual-oracle deviation
+check). Major assets are well-covered; long-tail assets would need TWAP
+fallbacks or wider safety bands.
+
+**Same pair across more chains** (e.g. USDC/WETH on Arbitrum) is much
+easier — just deploy the hook + relayer on the new chain and add the chain
+to the vault's registry. Single admin tx after deployment.
 
 **BNB enablement** — designed-in but waiting on CCTP-BNB + V4-BNB to ship.
 Single admin tx flips the chain registry when both are live.
