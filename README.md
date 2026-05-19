@@ -522,35 +522,60 @@ Percentages are real completion counts from `TODO.md` checkboxes.
 - **Cross-chain:** MockHyperlaneMailbox delivers messages between Anvil forks; production swap to real Hyperlane mailboxes is a single env-var change.
 - **Vault lifecycle:** USDC deposit → cross-chain yield report → 15% performance fee harvest → fee shares minted to treasury. All math verified.
 
-## 16. Live Testnet Deployment (v5)
+## 16. Live Testnet Deployment (rc5 / rc6)
 
-Deployed 2026-05-17. All contracts verified on block explorers. v5 ships
-canonical pairId, chain registry with CCTP integration, async withdrawal
-queue, bidirectional `handle()`, plus the v5 hardening pass (DOS-resistant
-dispatch loops, Pyth confidence check, struct packing).
+Redeployed 2026-05-18 against `v1.0.0-rc6`. All contracts verified on block
+explorers. Ships canonical pairId, chain registry with CCTP integration,
+async withdrawal queue, bidirectional `handle()`, the full v5 hardening
+pass (DOS-resistant dispatch loops, Pyth confidence check, struct packing),
+**all R-1 through R-13 audit recommendations** (bounded `updateCrossChainAssets`,
+harvest staleness gate, 24h timelock on trust-root setters, guardian role,
+Pyth↔Chainlink cross-oracle check, CCTP recipient validation, sister-depth
+cap, cached Chainlink decimals), the **rc5 Relayer math + V4-correct settle**
+fix, and the **rc6 zero-delta short-circuit** on `Relayer._executeRebalance`.
 
 **Canonical pair id (ETH-USDC-V1)**: `0x7a00c543412ae44415418950dc1ea26ae8977c50cbcec8035a5d99a911085b04`
 
 | Contract | Chain | Address |
 |---|---|---|
-| Treasury | Base Sepolia | [`0x24FAb4871c5ed02Ad4c3dFdd5eB73126bd6bea2b`](https://sepolia.basescan.org/address/0x24FAb4871c5ed02Ad4c3dFdd5eB73126bd6bea2b#code) |
-| MirrorHook | Base Sepolia | [`0x6184B71D915404cB0d5848a2c10431a0DaccC540`](https://sepolia.basescan.org/address/0x6184B71D915404cB0d5848a2c10431a0DaccC540#code) |
-| MirrorVault | Base Sepolia | [`0x6C2288CB671f398c251DeB750c2D4c7680E97934`](https://sepolia.basescan.org/address/0x6C2288CB671f398c251DeB750c2D4c7680E97934#code) |
-| MirrorFactory | Base Sepolia | [`0x0C7a7cdD7e56f3Ec67cD4C2010cf73b9a0Ca74c2`](https://sepolia.basescan.org/address/0x0C7a7cdD7e56f3Ec67cD4C2010cf73b9a0Ca74c2#code) |
-| MirrorHook | Ethereum Sepolia | [`0x3F6F987021c6B08E2bC6c5E82765E31904fC8540`](https://sepolia.etherscan.io/address/0x3F6F987021c6B08E2bC6c5E82765E31904fC8540#code) |
-| Relayer | Ethereum Sepolia | [`0xC36062cf5aA913606b36A0913a899D13F4536B58`](https://sepolia.etherscan.io/address/0xC36062cf5aA913606b36A0913a899D13F4536B58#code) |
+| Treasury | Base Sepolia | [`0x00288400B0202Fa7c236d52685fFd725B4780392`](https://sepolia.basescan.org/address/0x00288400B0202Fa7c236d52685fFd725B4780392#code) |
+| MirrorHook | Base Sepolia | [`0xA059C8544E046F29C5c2A9f0dE6314964926c540`](https://sepolia.basescan.org/address/0xA059C8544E046F29C5c2A9f0dE6314964926c540#code) |
+| MirrorVault | Base Sepolia | [`0x062b9E547689D53D9c5b059215ED967a9ceAf37b`](https://sepolia.basescan.org/address/0x062b9E547689D53D9c5b059215ED967a9ceAf37b#code) |
+| MirrorFactory | Base Sepolia | [`0xC3e117CD904db351F919134adCee7237F3ebC2A7`](https://sepolia.basescan.org/address/0xC3e117CD904db351F919134adCee7237F3ebC2A7#code) |
+| MirrorHook | Ethereum Sepolia | [`0xc3233eb9C427Cc1ACA5cF2d5c5e89c668F148540`](https://sepolia.etherscan.io/address/0xc3233eb9C427Cc1ACA5cF2d5c5e89c668F148540#code) |
+| Relayer (rc6) | Ethereum Sepolia | [`0x5D7BA93B47f93eaa359ca6063F39Eaeb4743b727`](https://sepolia.etherscan.io/address/0x5D7BA93B47f93eaa359ca6063F39Eaeb4743b727#code) |
 
 Wiring state:
-- Vault chain registry: 2 enabled domains — Base (84532, alloc 60%), Ethereum (11155111, alloc 40%, CCTP domain 0, recipient = ETH Relayer ✓ left-padded)
-- Hook canonical pair id matches across both chains ✓
-- Base hook → ETH Relayer (executable rebalance path) + authSenders[ETH hook] = true (inbound `handle()` path) ✓
-- ETH hook → Base hook (depth notification) + Relayer authSenders[Base hook] = true (executable receipt path) ✓
-- Both hooks funded with 0.01 ETH for Hyperlane dispatch fees ✓
-- V4 pools initialized on both chains at tick 199800 with mirv hooks attached ✓
-- ChainConfig packed 5→3 storage slots ✓
+- Vault chain registry: 2 enabled domains — Base (84532, alloc 60%), Ethereum (11155111, alloc 40%, CCTP domain 0, recipient = current rc6 Relayer, left-padded)
+- Hook canonical pair id matches across both chains
+- Base hook → rc6 Relayer (executable rebalance path) + `authorizedSenders[ETH hook] = true` (inbound `handle()` path)
+- ETH hook → Base hook (depth notification) + Relayer `authorizedSenders[Base hook] = true` (executable receipt path)
+- Both hooks funded with 0.01 ETH for Hyperlane dispatch fees
+- Both V4 pools initialized at tick 199799 with mirv hooks attached and bootstrap LP added (each at L = 2,000,000,000)
+- rc6 Relayer pre-seeded with 10 USDC + 0.001 WETH as the inventory floor for cross-chain LP execution
 
-Earlier iterations (v1–v4) are abandoned on testnet; their final balances stay
-stranded as part of the cost of iterating. See git log for the version history.
+Hardening defaults active on chain (cast-verified):
+
+| Layer | Knob | Value |
+|---|---|---|
+| R-1 | `MirrorVault.maxCrossChainAssetsDeltaBps` | `2500` (25%) |
+| R-3 | `MirrorVault.crossChainAssetsMaxStaleness` | `3600` sec (1 hour) |
+| R-5 | `MirrorVault.TREASURY_TIMELOCK_DELAY` | `86400` sec (24 hours) |
+| R-11 | `MirrorHook.oracleDeviationToleranceBps` | `500` (5%) |
+| R-13 | `MirrorHook.maxSisterDepthMultiple` | `10` × prior depth |
+
+End-to-end pipeline validation (live txs):
+
+| Path | Source tx | Destination tx |
+|---|---|---|
+| Base → ETH agent dispatch (LP execute) | `0x8a8841d1…000f` (Base) | `0x6e3bb567…7381` (ETH) — `RebalanceExecuted` + V4 modify + token transfers |
+| ETH → Base V4-callback notification | (Hyperlane delivered ETH→Base) | `0x49cb5e21…6e54` (Base) — `SisterDepthReported` + `SisterNotificationReceived` |
+| Base → ETH zero-delta short-circuit (rc6) | `0x64a22b1c…4762` (Base) | `0xeee761e9…5f13` (ETH) — `RebalanceSkippedZeroDelta`, no V4 modify, 154k gas |
+
+Earlier iterations (v1–v4, v5 with rc1-era contracts, and the abandoned rc5
+Relayer at `0x72e2538a…0155`) are stranded on testnet; their final balances
+stay there as part of the cost of iterating. See git log + the `v1.0.0-rcN`
+tags for the full version history.
 
 ## 17. Design Documents
 
