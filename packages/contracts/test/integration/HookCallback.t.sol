@@ -367,6 +367,68 @@ contract HookCallbackTest is Test {
         assertEq(hook.sisterDepths(1, canonicalPairId), priorDepth, "zero-depth dispatch must not clobber valid tracking");
     }
 
+    function test_reportSisterDepthStampsLastReportAt() public {
+        // Agent path: reportSisterDepth must write block.timestamp to lastSisterReportAt
+        vm.warp(1_000_000);
+        vm.prank(agent);
+        hook.reportSisterDepth(1, 5_000_000e18);
+        assertEq(hook.lastSisterReportAt(1), 1_000_000, "reportSisterDepth must stamp lastSisterReportAt");
+    }
+
+    function test_handleStampsLastReportAt() public {
+        // Hyperlane path: handle() with non-zero currentDepth must stamp timestamp
+        bytes32 sister = bytes32(uint256(uint160(makeAddr("sister-handle"))));
+        vm.prank(owner);
+        hook.setAuthorizedSender(sister, true);
+
+        vm.warp(2_000_000);
+
+        MirrorHook.RebalanceMessage memory rm = MirrorHook.RebalanceMessage({
+            pairId: hook.canonicalPairId(),
+            deltaToken0: 0, deltaToken1: 0, newFee: 3000,
+            tickLower: 0, tickUpper: 0,
+            minExpectedYield: 0,
+            currentDepth: 7_500_000e18
+        });
+        vm.prank(HYPERLANE_MAILBOX);
+        hook.handle(1, sister, abi.encode(rm));
+
+        assertEq(hook.lastSisterReportAt(1), 2_000_000, "handle() must stamp lastSisterReportAt on non-zero depth");
+    }
+
+    function test_quoterReliableFalseWhenSisterStale() public {
+        // Register a sister domain + report depth
+        vm.startPrank(owner);
+        hook.addSisterDomain(1, bytes32(uint256(uint160(makeAddr("sister-eth")))));
+        vm.stopPrank();
+
+        vm.warp(1_000_000);
+        vm.prank(agent);
+        hook.reportSisterDepth(1, 5_000_000e18);
+
+        // Right after the report: reliable
+        bytes32 pid = bytes32(PoolId.unwrap(poolId));
+        MirrorHook.CrossChainQuote memory q1 = hook.quoteCrossChainPool(pid);
+        assertTrue(q1.reliable, "quote must be reliable immediately after a fresh sister report");
+
+        // Jump past the staleness window (default 3600s)
+        vm.warp(1_000_000 + 3700);
+        MirrorHook.CrossChainQuote memory q2 = hook.quoteCrossChainPool(pid);
+        assertFalse(q2.reliable, "quote must be unreliable once a sister report exceeds the staleness window");
+    }
+
+    function test_setSisterDepthStalenessOwnerOnly() public {
+        // Non-owner reverts
+        vm.prank(alice);
+        vm.expectRevert();
+        hook.setSisterDepthStaleness(7200);
+
+        // Owner can update
+        vm.prank(owner);
+        hook.setSisterDepthStaleness(7200);
+        assertEq(hook.sisterDepthStaleness(), 7200, "owner update must persist");
+    }
+
     function test_imbalanceFromLpEventFiresDispatch() public {
         PoolId pid = poolKey.toId();
 

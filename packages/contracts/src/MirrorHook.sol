@@ -123,6 +123,18 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
     /// @dev Last reported depth (USD, 18 decimals) per sister domain per pair
     mapping(uint32 => mapping(bytes32 => uint256)) public sisterDepths;
 
+    /// @dev Last sister-report timestamp per sister domain. Updated whenever
+    ///      `handle()` or `reportSisterDepth()` writes a depth. Used by the
+    ///      quoter to flag a stale reading: if any sister hasn't reported
+    ///      within `sisterDepthStaleness` seconds, the quoter's `reliable`
+    ///      field is false so routers fall back to single-chain quoting.
+    mapping(uint32 => uint256) public lastSisterReportAt;
+
+    /// @dev Staleness threshold for sister depth reads. Default 1 hour matches
+    ///      vault's `crossChainAssetsMaxStaleness` so the protocol speaks with
+    ///      one freshness voice. Owner-tunable for chains with slower agents.
+    uint256 public sisterDepthStaleness = 3600;
+
     /// @dev Local depth per pool (updated after each event)
     mapping(PoolId => uint256) public localDepthUsd;
 
@@ -290,10 +302,12 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
 
     /// @notice Agents report sister pool depths here so the hook can make
     ///         local imbalance decisions without oracle reads. Reports are
-    ///         stored against this hook's canonicalPairId.
+    ///         stored against this hook's canonicalPairId. Also updates the
+    ///         per-sister freshness timestamp the quoter reads.
     function reportSisterDepth(uint32 domain, uint256 depthUsd) external {
         if (!authorizedAgents[msg.sender]) revert NotAuthorizedAgent();
         sisterDepths[domain][canonicalPairId] = depthUsd;
+        lastSisterReportAt[domain] = block.timestamp;
         emit SisterDepthReported(domain, canonicalPairId, depthUsd);
     }
 
@@ -355,6 +369,7 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
                 }
             }
             sisterDepths[origin][canonicalPairId] = stored;
+            lastSisterReportAt[origin] = block.timestamp;
             emit SisterDepthReported(origin, canonicalPairId, stored);
         }
 
@@ -560,6 +575,10 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
 
         uint256 bestSisterDepth = 0;
         uint256 total = q.localDepthUsd;
+        bool anyStale = false;
+        uint256 cutoff = block.timestamp > sisterDepthStaleness
+            ? block.timestamp - sisterDepthStaleness
+            : 0;
         for (uint256 i; i < len; ++i) {
             uint32 dom = sisterDomains[i].domainId;
             uint256 depth = sisterDepths[dom][canonicalPairId];
@@ -567,6 +586,10 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
             q.sisterDepthsUsd[i] = depth;
             total += depth;
             if (depth > bestSisterDepth) bestSisterDepth = depth;
+            // A sister with depth > 0 but a last-report timestamp older than
+            // the staleness window is suspect — the agent that's supposed to
+            // refresh it may have died. Flag the whole quote as unreliable.
+            if (depth > 0 && lastSisterReportAt[dom] < cutoff) anyStale = true;
         }
         q.totalCrossChainDepthUsd = total;
 
@@ -579,9 +602,9 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
             ? MAX_BPS
             : (q.localDepthUsd * MAX_BPS) / bestSisterDepth;
 
-        // Reliable iff not paused. Future versions may also check per-sister
-        // report staleness once we add a timestamp tracker.
-        q.reliable = !paused();
+        // Reliable iff not paused AND no sister depth is past its staleness window.
+        // Routers should fall back to single-chain quoting when this is false.
+        q.reliable = !paused() && !anyStale;
     }
 
     // ─── Admin ───────────────────────────────────────────────────────────────
@@ -633,6 +656,13 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
     function setDispatchCooldown(uint256 seconds_) external onlyOwner {
         emit DispatchCooldownUpdated(dispatchCooldown, seconds_);
         dispatchCooldown = seconds_;
+    }
+
+    event SisterDepthStalenessUpdated(uint256 oldSeconds, uint256 newSeconds);
+
+    function setSisterDepthStaleness(uint256 seconds_) external onlyOwner {
+        emit SisterDepthStalenessUpdated(sisterDepthStaleness, seconds_);
+        sisterDepthStaleness = seconds_;
     }
 
     function setMaxMoveBps(uint256 bps) external onlyOwner {
