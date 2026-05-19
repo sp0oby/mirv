@@ -95,6 +95,85 @@ shares; 85% stays in the share price (i.e. you keep it).
 
 ---
 
+## Honest framing — what actually has to happen for this to be useful
+
+### Who can add LP to mirv's pools?
+
+Anyone. V4 pools are permissionless. Anyone with USDC + WETH can call
+`PoolManager.modifyLiquidity` against our pool — the vault isn't a gatekeeper,
+just one (large, automated) LP among potentially many.
+
+Practically though, **nobody will add LP to our pool over the canonical Uniswap
+pool unless they specifically want exposure to the swarm's cross-chain
+coordination**. Same tokens, same fee tier, less depth at launch. So today
+the pool's liquidity ≈ what the vault has deposited via CCTP + Relayer.
+
+### What the swarm actually does today
+
+It manages the vault's own positions across the two chains:
+- A new deposit lands → swarm rebalances allocation
+- External swaps hit our pool → swarm shifts USDC toward the chain earning more fees
+- Price drifts outside the LP's tick range → swarm re-centers (planned)
+
+**Two of those three only happen when there's external swap volume hitting our pools.**
+On testnet, with no external traders, the swarm cycles every 45s and almost
+always concludes "no action needed." It's not broken — there's just nothing to
+optimize until users + traders show up. The mechanism is validated; the volume
+isn't.
+
+### What makes external volume happen
+
+This is the actual go-to-market problem, and it's bigger than the contract layer:
+
+1. **Seed real depth at launch.** Routers (Uniswap Universal Router, 1inch,
+   Matcha, CowSwap) only quote pools that are deep enough to be competitive.
+   With $20 in our pool, nobody routes through us. With $500k–$1M of treasury-
+   seeded depth at mainnet launch, we show up in quotes.
+
+2. **Get into router + aggregator allowlists.** The Uniswap Universal Router
+   already supports V4, but only pools the router knows about. Aggregators
+   index pools by hook address; we'd need to be in their hook allowlists. This
+   is outreach work, not contract work.
+
+3. **The cross-chain depth pitch.** Our actual edge for a router or aggregator
+   is: *"if you're quoting a swap on Base and a deeper version of the pair
+   exists on Ethereum, mirv's hook exposes that. You can route through us for
+   better effective execution because we coordinate depth across chains."*
+   This is the V4 hook primitive we built, and it's the thing that makes
+   mirv ≠ "just another LP."
+
+4. **Direct integration partners.** Cross-chain swap UIs (Across, deBridge,
+   LI.FI) want deep, multi-chain liquidity. We can be a backend for them.
+
+### The swarm is also missing some intelligence
+
+Today the agents only see the inside of our own pools. Before mainnet they
+need to also see:
+
+- **Canonical pool depth on each chain.** If our pool has 1/10th the depth of
+  the canonical Uniswap pool, the swarm should recognize it and either widen
+  the tick range, lower the fee tier, or signal that we need more seed depth —
+  not just rebalance the small amount of capital we have.
+- **Where the canonical pool is trading.** If price drifts outside our tick
+  range, our LP earns nothing until rebalanced. Right now we wait for the
+  imbalance signal; smarter agents would tighten the range proactively based
+  on canonical pool price.
+
+Both are pure agent-code additions (no contract changes). 1–2 days each.
+
+### TL;DR of the honest framing
+
+mirv is not magic. It's:
+- A hook that exposes cross-chain liquidity depth as an on-chain primitive
+- A vault that lets users deposit once and get LP exposure across chains
+- A swarm that keeps the vault's positions efficient as conditions change
+
+For depositors to earn extra yield, our pools need real swap volume. That
+needs router integration and meaningful seed depth — both work that happens
+*before* mainnet. The roadmap below lists what's still to build.
+
+---
+
 ## Longer version
 
 **mirv** (short for **mir**rored **v**ault) is a fully autonomous cross-chain liquidity protocol built on Uniswap V4. A public ERC-4626 vault on Base accepts a single USDC deposit; the protocol then bridges proportional amounts to sister chains via Circle CCTP and adds mirrored LP positions on each chain's V4 pool, keeping them synchronized in near-real-time through a swarm of LLM-powered agents.
@@ -633,7 +712,59 @@ Percentages are real completion counts from `TODO.md` checkboxes.
 
 ### Forward roadmap
 
-Items already on the board but not yet started:
+#### Pre-mainnet must-haves (the protocol must be usable + profitable on day one)
+
+These are the work items that have to ship before mainnet, because without
+them mirv is "two empty pools on two chains" and depositors won't earn
+anything. Roughly ordered by what unblocks what.
+
+**1. Treasury seed-depth strategy at mainnet launch.** Treasury holds USDC
+and matches it with WETH to seed the Base + Ethereum pools with enough
+depth that routers consider us. Target: $500k–$1M per chain at launch,
+funded from grant + initial team capital. Ramps up as deposits come in.
+Without this, no router quotes us, no swap volume, no fees, no extra yield.
+~1 week of prep + the actual mainnet-day funding.
+
+**2. Canonical-pool monitoring in the agent.** Today the agents only read
+our own pool's depth. They need to also read the canonical Uniswap pool
+on each chain (no-hook poolId) so they can detect when our pool is
+non-competitive and either tighten the tick range, lower the fee tier,
+or signal "we need more seed depth here." 1–2 days, no contract changes.
+
+**3. Cross-pool tick alignment.** The strategist agent should observe where
+the canonical pool is trading and keep our LP's tick range bracketing that
+price. If price drifts outside our range, our LP stops earning until
+rebalanced. Currently we wait for the imbalance signal; smarter agents
+would tighten proactively. 2–3 days, agent-only.
+
+**4. Hook quoter interface for routers.** Add an external view function on
+`MirrorHook` — `quoteEffectivePrice(amountIn, isCrossChain)` — that returns
+mirv's effective execution price including cross-chain depth coordination.
+This is what routers and aggregators would call to decide whether to route
+through us. Contract change + tests. ~3 days.
+
+**5. Router + aggregator outreach.** Get mirv's hook into:
+   - Uniswap's Universal Router quoter (whoever maintains the V4 quoter logic)
+   - 1inch's pool allowlist
+   - Matcha's V4 indexer
+   - CowSwap's solver pool set
+   This is outreach work, not code, but it's gated on (4) above.
+
+**6. Direct integration partner pilots.** Reach out to:
+   - Across / deBridge / LI.FI as a backend for their cross-chain swap routing
+   - Cross-chain wallets (Trust Wallet, Rabby) for direct integration
+   The pitch: mirv's hook is the only place that exposes cross-chain depth
+   as a callable primitive.
+
+**7. External audit.** Cantina or Spearbit, ~$30–50k engagement. Already
+listed as Phase 6 but worth re-emphasizing here: mainnet launch is gated
+on this.
+
+**8. Treasury multisig + governance.** Replace the current single-EOA
+treasury with a Gnosis Safe (2-of-3 or 3-of-5). Wire up the 24h
+`TREASURY_TIMELOCK_DELAY` to a real timelock contract. ~1 week.
+
+#### Nice-to-haves that don't gate mainnet
 
 **x402 LLM payments from the vault** — instead of paying for the swarm's Claude API
 calls from a centralized API key, the agent coordinator will pay per-call via
@@ -649,12 +780,6 @@ A small Postgres or Durable Object layer behind the agent would let it
 remember prior rebalance reasoning, build up a model of which cycles produced
 the most extra yield, and avoid repeating mistakes. Optional Redis as a hot
 cache. ~1 week.
-
-**`/docs` page for technical readers** — the user-facing frontend stripped
-all the V4 hook / Hyperlane / CCTP language to keep depositor copy clean.
-A `/docs` page links back to the technical depth (contract addresses, the
-hook architecture, the rebalance flow, the R-1..R-13 safety set) for
-integrators and security researchers. ~2 days.
 
 **`/about` long-form** — protocol explanation that didn't fit on the landing.
 The kind of page someone shares to convince a friend to deposit. ~2 days.

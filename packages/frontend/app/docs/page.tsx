@@ -196,6 +196,37 @@ export default function DocsPage() {
         </p>
       </section>
 
+      {/* ─── Honest framing ────────────────────────────────────── */}
+      <section className="mb-14">
+        <h2 className="font-maru text-[24px] font-semibold text-ink mb-4">
+          ❀ what has to be true for this to actually be useful
+        </h2>
+        <p className="text-[15px] text-ink-soft leading-relaxed mb-4 max-w-[72ch]">
+          We're being honest here, because Uniswap and other smart people will
+          ask. mirv's pools are permissionless — anyone with USDC + WETH can
+          add LP to them. But on day one, nobody will, because there's no
+          incentive to use our pool over the canonical Uniswap one if they're
+          shallower.
+        </p>
+        <p className="text-[15px] text-ink-soft leading-relaxed mb-4 max-w-[72ch]">
+          That means today the swarm is mostly managing the vault's own
+          positions across two chains. It's a real protocol with real
+          cross-chain mechanics — but to earn fees for depositors, our pools
+          need <em>external</em> swap volume, and that requires:
+        </p>
+        <ul className="space-y-2.5 text-[14px] text-ink-soft leading-relaxed max-w-[72ch] mb-4">
+          <li><strong className="text-ink">Seed depth at mainnet launch</strong> — treasury seeds $500k–$1M per chain so routers consider us competitive.</li>
+          <li><strong className="text-ink">Router + aggregator integration</strong> — Uniswap Universal Router, 1inch, Matcha need to know our pool exists and route through it. We're working toward this.</li>
+          <li><strong className="text-ink">The hook's cross-chain primitive being adopted</strong> — our actual edge is that routers can read cross-chain depth from a single contract call. That's what makes mirv ≠ "just another LP."</li>
+          <li><strong className="text-ink">Smarter agents</strong> — the swarm needs to also monitor canonical pools (not just our own) to detect when our pool is non-competitive and adjust.</li>
+        </ul>
+        <p className="text-[14px] text-ink-soft leading-relaxed max-w-[72ch]">
+          The contracts are validated end-to-end. The mechanism works. The
+          go-to-market — getting volume to flow through — is the next phase.
+          See the README's "Pre-mainnet must-haves" section for the work plan.
+        </p>
+      </section>
+
       {/* ─── For technical readers ────────────────────────────────────── */}
       <section className="mb-14">
         <h2 className="font-maru text-[24px] font-semibold text-ink mb-4">
