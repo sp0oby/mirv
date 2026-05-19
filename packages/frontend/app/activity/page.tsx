@@ -1,8 +1,5 @@
 import { readRecentActivity, shortTx, type ActivityEvent } from "@/lib/contracts";
 
-// Activity feed — live event stream from rc6 testnet. Each render queries
-// the last hour of blocks on Base + Ethereum and merges the events into a
-// unified feed. Server component, no wallet needed.
 export const revalidate = 30;
 
 const KIND_COLORS: Record<ActivityEvent["kind"], string> = {
@@ -14,11 +11,11 @@ const KIND_COLORS: Record<ActivityEvent["kind"], string> = {
 };
 
 const KIND_TITLES: Record<ActivityEvent["kind"], string> = {
-  dispatch: "rebalance dispatched",
-  execute:  "rebalance executed",
-  skip:     "skipped (zero-delta)",
-  notify:   "sister notification received",
-  cap:      "sister depth capped",
+  dispatch: "rebalance started",
+  execute:  "rebalance delivered",
+  skip:     "no change needed",
+  notify:   "depth update received",
+  cap:      "depth update capped (safety)",
 };
 
 function scanLink(chain: "base" | "eth", tx: string): string {
@@ -29,11 +26,11 @@ function scanLink(chain: "base" | "eth", tx: string): string {
 function chainArrow(kind: ActivityEvent["kind"], chain: "base" | "eth"): string {
   if (kind === "dispatch" && chain === "base") return "Base → Ethereum";
   if (kind === "dispatch" && chain === "eth")  return "Ethereum → Base";
-  if (kind === "execute") return "Ethereum (relayer)";
-  if (kind === "skip")    return "Ethereum (no-op)";
-  if (kind === "notify" && chain === "base") return "← from Ethereum hook";
-  if (kind === "notify" && chain === "eth")  return "← from Base hook";
-  if (kind === "cap" && chain === "base")    return "Base hook (sister cap)";
+  if (kind === "execute") return "delivered on Ethereum";
+  if (kind === "skip")    return "drift too small to act on";
+  if (kind === "notify" && chain === "base") return "got an update from Ethereum";
+  if (kind === "notify" && chain === "eth")  return "got an update from Base";
+  if (kind === "cap" && chain === "base")    return "safety cap on Base";
   return chain;
 }
 
@@ -53,27 +50,24 @@ export default async function ActivityPage() {
           activity
         </h1>
         <p className="text-[16px] text-ink-soft max-w-[60ch]">
-          everything the swarm + the contracts have done in the last hour.
-          dispatches from each MirrorHook, deliveries on the Relayer, and
-          inbound depth notifications on each hook's handle().
+          everything the swarm has done in the last hour. every rebalance,
+          every cross-chain update, every safety cap — in plain order.
         </p>
       </header>
 
       {err && (
         <section className="frame-outer p-5 mb-8 bg-paper-warm">
-          <p className="text-[14px] text-ink">⚠ public rpc was unreachable. retry in 30s.</p>
-          <pre className="text-[11px] text-ink-faint mt-2 break-all">{err}</pre>
+          <p className="text-[14px] text-ink">couldn't reach the network just now. give it 30s and it'll come back.</p>
         </section>
       )}
 
       {!err && events.length === 0 && (
         <section className="frame-outer p-6 mb-8 text-center">
           <p className="text-[15px] text-ink-soft mb-2">
-            no on-chain activity in the last hour.
+            quiet hour — nothing's happened in the last 60 minutes.
           </p>
           <p className="text-[12px] text-ink-faint">
-            this is normal — the swarm only dispatches when imbalance exceeds
-            3% between chains, and testnet activity is sparse.
+            the swarm only acts when the chains drift more than 3% apart, so calm stretches are the norm.
           </p>
         </section>
       )}
@@ -96,23 +90,14 @@ export default async function ActivityPage() {
                   <span className="font-maru text-[15px] font-semibold text-ink">
                     {KIND_TITLES[e.kind]}
                   </span>
-                  <span className="text-[12px] text-ink-faint font-mono">
-                    block {e.block.toString()}
-                  </span>
                 </div>
                 <p className="text-[13px] text-ink-soft leading-snug mb-2">
                   {chainArrow(e.kind, e.chain)}
                 </p>
                 <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-ink-faint">
                   <a className="underline text-pink-hot" href={scanLink(e.chain, e.tx)} target="_blank" rel="noopener noreferrer">
-                    {shortTx(e.tx)}
+                    view receipt {shortTx(e.tx)}
                   </a>
-                  {e.msgId && (
-                    <>
-                      <span>·</span>
-                      <span>msg {shortTx(e.msgId)}</span>
-                    </>
-                  )}
                 </div>
               </div>
             </div>
@@ -121,7 +106,7 @@ export default async function ActivityPage() {
       </section>
 
       <p className="text-[12px] text-ink-faint">
-        feed scans the last ~1h of blocks on each chain via public RPC. 30s page cache.
+        live · last hour · refreshes every 30s
       </p>
     </div>
   );

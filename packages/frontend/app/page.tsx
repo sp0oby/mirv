@@ -27,8 +27,8 @@ export default function LandingPage() {
             mirror.
           </h1>
           <p className="text-[20px] text-ink-soft max-w-[44ch] leading-snug mb-9">
-            deposit usdc on base. agents rebalance ur LP across ethereum + base.
-            u keep the extra yield.
+            deposit usdc on base. agents move your money where it earns more,
+            across base + ethereum. you keep most of the extra.
           </p>
 
           <div className="flex flex-wrap gap-4">
@@ -63,7 +63,7 @@ export default function LandingPage() {
             className="stamp absolute bottom-8 -right-5 text-[14px] px-3 py-1.5"
             style={{ transform: "rotate(11deg)", color: "#3a2c3a" }}
           >
-            rc6
+            testnet
           </div>
         </div>
       </section>
@@ -80,10 +80,10 @@ export default function LandingPage() {
 
         <div className="frame-outer p-6 bg-paper-warm" style={{ transform: "rotate(0.6deg)" }}>
           <p className="font-maru text-[13px] text-ink-faint uppercase tracking-wider mb-1">
-            ❀ extra apy (7d)
+            ❀ extra yield (7d)
           </p>
           <p className="pixel text-[40px] text-ink leading-tight">—</p>
-          <p className="text-[13px] text-ink-soft mt-1">no harvest yet</p>
+          <p className="text-[13px] text-ink-soft mt-1">no earnings yet</p>
         </div>
 
         <div className="frame-outer p-6" style={{ transform: "rotate(-0.4deg)" }}>
@@ -106,9 +106,9 @@ export default function LandingPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {[
-            { n: "1", title: "deposit on base", body: "shares mint 1:1. vault splits via cctp.", bg: "#ffd1dc", tilt: -1 },
-            { n: "2", title: "swarm rebalances", body: "agents move LP across chains on imbalance.", bg: "#bde0fe", tilt: 0.8 },
-            { n: "3", title: "harvest extra", body: "you keep 85%, treasury takes 15% of the alpha.", bg: "#aaf0d1", tilt: -0.5 },
+            { n: "1", title: "deposit on base", body: "your usdc goes into one vault. it's split across both chains for you.", bg: "#ffd1dc", tilt: -1 },
+            { n: "2", title: "swarm rebalances", body: "agents move money to whichever chain is paying more, every 45 seconds.", bg: "#bde0fe", tilt: 0.8 },
+            { n: "3", title: "you earn", body: "you keep 85% of the extra. the protocol takes 15% to stay alive.", bg: "#aaf0d1", tilt: -0.5 },
           ].map((c) => (
             <article
               key={c.n}
@@ -131,9 +131,8 @@ export default function LandingPage() {
           ✦ &nbsp;the swarm
         </h2>
         <p className="text-[15px] text-ink-soft mb-8 max-w-[60ch]">
-          four agents work the pools 24/7. every 45 seconds they read live
-          state, decide if there's a rebalance worth making, and execute
-          across chains.
+          four agents work the chains 24/7. every 45 seconds they check what
+          each side looks like, decide if there's a move worth making, and act.
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
@@ -143,7 +142,7 @@ export default function LandingPage() {
               count: "×2",
               title: "the readers",
               body:
-                "one per chain. they watch pool depth and price. report back what each side looks like.",
+                "one on each chain. they watch what's there and how much it's earning, and report back.",
               bg: "#ffd1dc",
               tilt: -1.2,
             },
@@ -152,7 +151,7 @@ export default function LandingPage() {
               count: "×1",
               title: "the strategist",
               body:
-                "compares the chains. if the imbalance is real, plans a move — how much, which tick range.",
+                "compares the two chains. if one's clearly paying more, plans how much to move.",
               bg: "#bde0fe",
               tilt: 0.8,
             },
@@ -161,7 +160,7 @@ export default function LandingPage() {
               count: "×1",
               title: "the veto",
               body:
-                "double-checks every plan. blocks moves that are too large, react to bad prices, or fire too often.",
+                "double-checks every plan. blocks moves that are too big, badly priced, or too frequent.",
               bg: "#ffd206",
               tilt: -0.6,
             },
@@ -170,7 +169,7 @@ export default function LandingPage() {
               count: "×1",
               title: "the hand",
               body:
-                "the only one that signs transactions. executes the plan once risk clears, pays the bridge fee.",
+                "the only one that signs transactions. moves the money once everyone else agrees.",
               bg: "#aaf0d1",
               tilt: 1.1,
             },
@@ -201,9 +200,9 @@ export default function LandingPage() {
       {/* ─── Status strip ──────────────────────────────────────────────── */}
       <section className="mt-20 text-center">
         <p className="text-[14px] text-ink-faint">
-          live on base sepolia + eth sepolia · audit candidate v1.0.0-rc6 ·{" "}
+          running on testnet · not audited yet · open source on{" "}
           <a href="https://github.com/sp0oby/mirv" className="underline text-pink-hot">
-            source on github
+            github
           </a>
         </p>
       </section>

@@ -2,10 +2,6 @@ import Link from "next/link";
 import { CycleCountdown } from "@/components/CycleCountdown";
 import { readDashboardState, readRecentActivity, formatUsdc, timeAgo, shortTx, ADDR } from "@/lib/contracts";
 
-// Dashboard — server component, all reads happen on the build server / on the
-// Vercel edge runtime. Each user request triggers a single batch of RPC reads
-// (via Promise.all in readDashboardState), then the rendered HTML is cached
-// for `revalidate` seconds. Cheap and live-ish.
 export const revalidate = 30;
 
 export default async function DashboardPage() {
@@ -34,17 +30,16 @@ export default async function DashboardPage() {
           dashboard
         </h1>
         <p className="text-[16px] text-ink-soft">
-          live state from base sepolia + ethereum sepolia rc6 contracts. refreshes every 30s.
+          what the mirror is doing right now.
         </p>
       </header>
 
       {readError && (
         <section className="frame-outer p-5 mb-8 bg-paper-warm">
           <p className="text-[14px] text-ink">
-            ⚠ couldn't reach a public rpc endpoint just now. retry in 30s, or check the contracts directly on{" "}
+            couldn't reach the network just now. give it 30s and it'll come back. you can always check the vault directly on{" "}
             <a className="underline text-pink-hot" href={`https://sepolia.basescan.org/address/${ADDR.base.vault}`}>basescan</a>.
           </p>
-          <pre className="text-[11px] text-ink-faint mt-2 break-all">{readError}</pre>
         </section>
       )}
 
@@ -58,17 +53,17 @@ export default async function DashboardPage() {
             ${tvlUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
           </p>
           <p className="text-[13px] text-ink-soft mt-1">
-            vault.totalAssets() · usdc
+            usdc held across both chains
           </p>
         </div>
 
         <div className="frame-outer p-6 bg-paper-warm" style={{ transform: "rotate(0.6deg)" }}>
           <p className="font-maru text-[13px] text-ink-faint uppercase tracking-wider mb-1">
-            ❀ extra apy (7d)
+            ❀ extra yield (7d)
           </p>
           <p className="pixel text-[44px] text-ink leading-tight">—</p>
           <p className="text-[13px] text-ink-soft mt-1">
-            {state && state.lastHarvest === 0n ? "no harvest yet" : `last harvest ${state ? timeAgo(state.lastHarvest) : "—"}`}
+            {state && state.lastHarvest === 0n ? "no earnings yet" : `last earnings collected ${state ? timeAgo(state.lastHarvest) : "—"}`}
           </p>
         </div>
 
@@ -81,7 +76,7 @@ export default async function DashboardPage() {
             <span className={state?.paused ? "w-3 h-3 rounded-full bg-pink-hot inline-block" : "w-3 h-3 rounded-full bg-mint-deep animate-heartbeat inline-block"} />
           </p>
           <p className="text-[13px] text-ink-soft mt-1">
-            {state && state.lastUpdate > 0n ? `last update ${timeAgo(state.lastUpdate)}` : "no agent reports yet"}
+            {state && state.lastUpdate > 0n ? `last check-in ${timeAgo(state.lastUpdate)}` : "waiting for first check-in"}
           </p>
         </div>
       </section>
@@ -93,14 +88,16 @@ export default async function DashboardPage() {
             ✿ share price
           </p>
           <p className="pixel text-[40px] text-ink leading-tight">
-            {sharePrice.toFixed(6)}
+            ${sharePrice.toFixed(4)}
           </p>
           <p className="text-[13px] text-ink-soft mt-1">
-            1 mirvUSDC = ${sharePrice.toFixed(6)} usdc
+            each share redeems for ${sharePrice.toFixed(4)} usdc
           </p>
-          <p className="text-[11px] text-ink-faint mt-2">
-            totalAssets / totalSupply. {state?.totalSupply === 0n && "(no shares minted yet)"}
-          </p>
+          {state?.totalSupply === 0n && (
+            <p className="text-[11px] text-ink-faint mt-2">
+              no one's deposited yet · share price starts at $1.00
+            </p>
+          )}
         </div>
 
         <CycleCountdown />
@@ -109,18 +106,18 @@ export default async function DashboardPage() {
       {/* ─── Per-chain depth ───────────────────────────────────────────── */}
       <section className="mb-12">
         <h2 className="font-maru text-[20px] font-semibold text-ink mb-5">
-          ❀ per-chain depth + allocation
+          ❀ how much liquidity is on each chain
         </h2>
         <div className="space-y-3">
           {[
-            { chain: "Base Sepolia",     depth: baseDepthUsdc, alloc: baseAlloc, color: "#ffd1dc", liquidity: state?.baseLiquidity },
-            { chain: "Ethereum Sepolia", depth: ethDepthUsdc,  alloc: ethAlloc,  color: "#bde0fe", liquidity: state?.ethLiquidity },
+            { chain: "Base",     depth: baseDepthUsdc, alloc: baseAlloc, color: "#ffd1dc" },
+            { chain: "Ethereum", depth: ethDepthUsdc,  alloc: ethAlloc,  color: "#bde0fe" },
           ].map((c) => (
             <div key={c.chain} className="frame-outer p-5">
               <div className="flex items-center justify-between mb-2">
                 <span className="font-maru text-[16px] text-ink font-semibold">{c.chain}</span>
                 <span className="font-mono text-[13px] text-ink-soft">
-                  target {c.alloc.toFixed(0)}% · localDepthUsd ${c.depth.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  target {c.alloc.toFixed(0)}% · ${c.depth.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                 </span>
               </div>
               <div className="h-3 rounded-full overflow-hidden bg-paper-deep border border-ink-soft/40">
@@ -132,32 +129,27 @@ export default async function DashboardPage() {
                   }}
                 />
               </div>
-              <p className="text-[12px] text-ink-faint mt-1.5">
-                v4 pool liquidity: <span className="font-mono">{c.liquidity?.toString() ?? "—"}</span>
-              </p>
             </div>
           ))}
         </div>
         <p className="text-[12px] text-ink-faint mt-3">
-          imbalance fires above 3%. localDepthUsd is unit-skewed on testnet
-          because token-order differs from mainnet — mechanism works,
-          magnitudes won't match mainnet semantics until per-pair oracle config.
+          the swarm shifts liquidity between chains when one side drifts more than 3% off target.
         </p>
       </section>
 
       {/* ─── Health strip ──────────────────────────────────────────────── */}
       <section className="mb-12">
         <h2 className="font-maru text-[20px] font-semibold text-ink mb-5">
-          ✦ health
+          ✦ system health
         </h2>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           {state && [
-            { label: "base hook ETH", value: `${(Number(state.baseHookEth) / 1e18).toFixed(4)} ETH`, ok: state.baseHookEth > 5_000_000_000_000_000n },
-            { label: "eth hook ETH",  value: `${(Number(state.ethHookEth)  / 1e18).toFixed(4)} ETH`, ok: state.ethHookEth  > 5_000_000_000_000_000n },
-            { label: "vault paused",  value: state.paused ? "yes ✗" : "no ✓", ok: !state.paused },
-            { label: "base hook paused",  value: state.baseHookPaused ? "yes ✗" : "no ✓", ok: !state.baseHookPaused },
-            { label: "eth hook paused",   value: state.ethHookPaused  ? "yes ✗" : "no ✓", ok: !state.ethHookPaused },
-            { label: "dispatch cooldown", value: `${Number(state.baseDispatchCooldown)}s`, ok: true },
+            { label: "base relayer gas", value: `${(Number(state.baseHookEth) / 1e18).toFixed(4)} ETH`, ok: state.baseHookEth > 5_000_000_000_000_000n },
+            { label: "ethereum relayer gas",  value: `${(Number(state.ethHookEth)  / 1e18).toFixed(4)} ETH`, ok: state.ethHookEth  > 5_000_000_000_000_000n },
+            { label: "deposits + withdrawals",  value: state.paused ? "frozen" : "open", ok: !state.paused },
+            { label: "base mirror",  value: state.baseHookPaused ? "paused" : "live", ok: !state.baseHookPaused },
+            { label: "ethereum mirror",   value: state.ethHookPaused  ? "paused" : "live", ok: !state.ethHookPaused },
+            { label: "min time between rebalances", value: `${Number(state.baseDispatchCooldown)}s`, ok: true },
           ].map((h, i) => (
             <div
               key={h.label}
@@ -176,21 +168,20 @@ export default async function DashboardPage() {
         </div>
       </section>
 
-      {/* ─── Recent dispatches ─────────────────────────────────────────── */}
+      {/* ─── Recent rebalances ─────────────────────────────────────────── */}
       <section className="mb-10">
         <div className="flex items-baseline justify-between mb-5">
           <h2 className="font-maru text-[20px] font-semibold text-ink">
-            ❀ recent dispatches
+            ❀ recent rebalances
           </h2>
           <Link href="/activity" className="text-[14px] text-pink-hot underline">
-            full feed →
+            see everything →
           </Link>
         </div>
         {dispatches.length === 0 ? (
           <div className="frame-outer p-5">
             <p className="text-[14px] text-ink-soft">
-              no dispatches in the last hour. the swarm fires when imbalance
-              between chains exceeds 3%.
+              the chains are in sync. nothing to do in the last hour.
             </p>
           </div>
         ) : (
@@ -198,15 +189,16 @@ export default async function DashboardPage() {
             <table className="w-full text-[14px]">
               <thead className="text-ink-faint text-[12px] uppercase tracking-wider">
                 <tr>
-                  <th className="text-left px-4 py-2 font-maru font-normal">tx</th>
-                  <th className="text-left px-4 py-2 font-maru font-normal">chain</th>
-                  <th className="text-left px-4 py-2 font-maru font-normal">kind</th>
-                  <th className="text-right px-4 py-2 font-maru font-normal">block</th>
+                  <th className="text-left px-4 py-2 font-maru font-normal">receipt</th>
+                  <th className="text-left px-4 py-2 font-maru font-normal">on</th>
+                  <th className="text-left px-4 py-2 font-maru font-normal">what happened</th>
                 </tr>
               </thead>
               <tbody>
                 {dispatches.map((d) => {
                   const scanHost = d.chain === "base" ? "sepolia.basescan.org" : "sepolia.etherscan.io";
+                  const chainName = d.chain === "base" ? "Base" : "Ethereum";
+                  const kindLabel = d.kind === "dispatch" ? "rebalance started" : d.kind === "execute" ? "rebalance delivered" : "no change needed";
                   return (
                     <tr key={d.id} className="border-t border-dotted border-ink-soft/30">
                       <td className="px-4 py-3 font-mono text-ink">
@@ -214,9 +206,8 @@ export default async function DashboardPage() {
                           {shortTx(d.tx)}
                         </a>
                       </td>
-                      <td className="px-4 py-3 text-ink-soft">{d.chain}</td>
-                      <td className="px-4 py-3 text-ink-soft">{d.kind}</td>
-                      <td className="px-4 py-3 text-right text-ink-faint">{d.block.toString()}</td>
+                      <td className="px-4 py-3 text-ink-soft">{chainName}</td>
+                      <td className="px-4 py-3 text-ink-soft">{kindLabel}</td>
                     </tr>
                   );
                 })}
@@ -227,7 +218,7 @@ export default async function DashboardPage() {
       </section>
 
       <p className="text-[12px] text-ink-faint">
-        all numbers above are live reads of the rc6 testnet contracts via public RPC. 30s cache.
+        live · refreshes every 30s · running on testnet
       </p>
     </div>
   );

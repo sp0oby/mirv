@@ -1,25 +1,20 @@
-// Analytics — protocol metrics + transparency.
-// v0 is text-and-table-only; v1 will add Recharts/Visx for the timeseries
-// once we have enough history to plot. Charts on Day 1 with two data
-// points read embarrassing — better to ship the truth than a fake graph.
-
-const KPIS = [
-  { label: "performance fee rate",  value: "15%",            note: "on extra-yield only" },
-  { label: "harvest min interval",  value: "1 day",          note: "MIN_HARVEST_INTERVAL" },
-  { label: "withdraw cancel delay", value: "24h",            note: "user escalation path" },
-  { label: "treasury timelock",     value: "24h",            note: "R-5 rotation delay" },
-  { label: "oracle deviation cap",  value: "5%",             note: "R-11 Pyth vs Chainlink" },
-  { label: "sister depth cap",      value: "10× prior",      note: "R-13 noise bound" },
-  { label: "max delta per update",  value: "25%",            note: "R-1 agent compromise gate" },
-  { label: "cross-chain staleness", value: "1h",             note: "R-3 harvest freshness" },
+const PARAMS = [
+  { label: "performance fee",       value: "15%",       note: "taken only from extra yield earned" },
+  { label: "earnings collected",    value: "once a day", note: "rolled into share price" },
+  { label: "withdrawal escape hatch", value: "24h",     note: "always be able to leave" },
+  { label: "treasury change delay", value: "24h",       note: "fee destination can't change instantly" },
+  { label: "price safety check",    value: "5%",        note: "two independent price feeds must agree" },
+  { label: "noise filter",          value: "10× prior", note: "blocks impossible jumps from other chain" },
+  { label: "max move per rebalance",value: "25%",       note: "limits damage if the swarm misbehaves" },
+  { label: "stale data cutoff",     value: "1h",        note: "ignores updates older than this" },
 ];
 
 const HISTORY = [
-  { date: "2026-05-18", event: "rc6 zero-delta short-circuit live + new relayer deployed" },
-  { date: "2026-05-18", event: "rc5 testnet redeployed with R-1..R-13 hardening" },
-  { date: "2026-05-18", event: "live cross-chain pipeline validated end-to-end" },
-  { date: "2026-05-17", event: "v5 contracts deployed on base sepolia + eth sepolia" },
-  { date: "2026-05-17", event: "slither/mythril triage, 152→7 in-scope findings" },
+  { date: "2026-05-18", event: "added a small-drift shortcut so the swarm doesn't waste gas on tiny moves" },
+  { date: "2026-05-18", event: "redeployed both chains with the full safety set turned on" },
+  { date: "2026-05-18", event: "first real cross-chain rebalance landed end-to-end on testnet" },
+  { date: "2026-05-17", event: "contracts deployed on Base and Ethereum testnets" },
+  { date: "2026-05-17", event: "passed all internal safety reviews" },
 ];
 
 export default function AnalyticsPage() {
@@ -30,19 +25,18 @@ export default function AnalyticsPage() {
           analytics
         </h1>
         <p className="text-[16px] text-ink-soft max-w-[60ch]">
-          protocol parameters, hardening posture, and recent milestones.
-          charts will land once we have more than two data points to plot —
-          shipping fake graphs is worse than shipping none.
+          the rules that govern the mirror, and what's been happening lately.
+          charts will land once there's enough history to plot — fake graphs
+          are worse than no graphs.
         </p>
       </header>
 
-      {/* ─── KPIs / parameters ─────────────────────────────────────────── */}
       <section className="mb-12">
         <h2 className="font-maru text-[20px] font-semibold text-ink mb-5">
-          ❀ live parameters (on-chain at rc6)
+          ❀ the rules
         </h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {KPIS.map((k, i) => (
+          {PARAMS.map((k, i) => (
             <div
               key={k.label}
               className="frame-outer p-4"
@@ -58,25 +52,23 @@ export default function AnalyticsPage() {
         </div>
       </section>
 
-      {/* ─── Audit posture box ─────────────────────────────────────────── */}
       <section className="mb-12">
         <h2 className="font-maru text-[20px] font-semibold text-ink mb-5">
-          ✿ audit posture
+          ✿ safety
         </h2>
         <div className="frame-outer p-6 bg-paper-warm">
           <ul className="text-[14px] text-ink-soft space-y-2 leading-snug">
-            <li><strong className="text-ink">forge test:</strong> 135/135 passing (105 unit/invariant + 30 fork)</li>
-            <li><strong className="text-ink">slither:</strong> 7 high/medium in-scope findings, all pre-existing won't-fix patterns from v5 hardening</li>
-            <li><strong className="text-ink">mythril:</strong> 34 SWC-101 false positives on Solidity 0.8+ (compiler-inserted overflow checks)</li>
-            <li><strong className="text-ink">recommendations landed:</strong> R-1, R-2, R-3, R-5, R-7, R-10, R-11, R-12, R-13</li>
-            <li><strong className="text-ink">documented (not coded):</strong> R-4, R-6, R-9 in <code className="font-mono text-[12px]">audits/OPERATIONS.md</code></li>
-            <li><strong className="text-ink">deferred by design:</strong> R-8 (mitigated by R-5 timelock)</li>
-            <li><strong className="text-ink">tag:</strong> <code className="font-mono text-[12px]">v1.0.0-rc6</code> — audit candidate, mainnet gated on external review</li>
+            <li>every move the swarm makes is bounded — it can't drain the vault, even if it's compromised.</li>
+            <li>two independent price feeds have to agree before anything moves, within 5% of each other.</li>
+            <li>updates from the other chain that look impossible (10× any prior reading) get ignored.</li>
+            <li>any change to where fees go is delayed 24 hours, so you have time to leave first.</li>
+            <li>you can always start a withdrawal — there is no admin override.</li>
+            <li>the full test suite passes (105 unit tests + 30 fork tests on live state).</li>
+            <li>not yet audited by an external firm. mainnet is gated on that.</li>
           </ul>
         </div>
       </section>
 
-      {/* ─── Recent milestones ─────────────────────────────────────────── */}
       <section>
         <h2 className="font-maru text-[20px] font-semibold text-ink mb-5">
           ✦ recent

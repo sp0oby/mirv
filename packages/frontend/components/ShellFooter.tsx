@@ -33,9 +33,9 @@ export function ShellFooter() {
             <span className="display-title text-[20px]">mirv</span>
           </div>
           <p className="text-[12px] text-ink-soft leading-relaxed">
-            cross-chain liquidity mirror on uniswap v4 + hyperlane. deposit once on base,
-            the swarm mirrors your LP across ethereum + base for the imbalance yield.
-            ur shares stay redeemable; protocol takes 15% of <em>extra</em>.
+            deposit usdc once on base. the swarm moves it between base + ethereum
+            to chase whichever side pays more. u can withdraw whenever; protocol
+            takes 15% of the <em>extra</em>.
           </p>
           <p className="text-[11px] text-ink-faint mt-4 leading-relaxed">
             site by <a href="https://github.com/sp0oby" className="underline text-pink-hot">sp0oby</a>
@@ -92,7 +92,7 @@ export function ShellFooter() {
 
       <div className="mt-10 pt-6 border-t border-dotted border-ink-soft/40 text-[11px] text-ink-faint flex flex-wrap justify-between gap-2">
         <span>(づ｡◕‿‿◕｡)づ tysm for visiting</span>
-        <span>mit licensed · audit candidate v1.0.0-rc6 · no warranty, no guarantees, dyor</span>
+        <span>mit licensed · not audited yet · no warranty, no guarantees, dyor</span>
       </div>
     </footer>
   );

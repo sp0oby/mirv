@@ -22,7 +22,7 @@ export function ShellHeader() {
             className="pixel text-ink-soft text-[12px] select-none"
             style={{ transform: "rotate(-7deg) translateY(-10px)" }}
           >
-            rc6
+            testnet
           </span>
         </Link>
 
