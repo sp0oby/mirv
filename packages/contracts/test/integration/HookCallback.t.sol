@@ -20,6 +20,7 @@ import {MirrorHook} from "../../src/MirrorHook.sol";
 import {Treasury} from "../../src/Treasury.sol";
 import {Relayer} from "../../src/Relayer.sol";
 import {AggregatorV3Interface} from "../../src/interfaces/IChainlink.sol";
+import {IMirrorHookQuoter} from "../../src/interfaces/IMirrorHookQuoter.sol";
 
 /// @notice Validates the full V4 hook callback chain on a real Base mainnet fork:
 ///   add liquidity → afterAddLiquidity fires
@@ -408,12 +409,12 @@ contract HookCallbackTest is Test {
 
         // Right after the report: reliable
         bytes32 pid = bytes32(PoolId.unwrap(poolId));
-        MirrorHook.CrossChainQuote memory q1 = hook.quoteCrossChainPool(pid);
+        IMirrorHookQuoter.CrossChainQuote memory q1 = hook.quoteCrossChainPool(pid);
         assertTrue(q1.reliable, "quote must be reliable immediately after a fresh sister report");
 
         // Jump past the staleness window (default 3600s)
         vm.warp(1_000_000 + 3700);
-        MirrorHook.CrossChainQuote memory q2 = hook.quoteCrossChainPool(pid);
+        IMirrorHookQuoter.CrossChainQuote memory q2 = hook.quoteCrossChainPool(pid);
         assertFalse(q2.reliable, "quote must be unreliable once a sister report exceeds the staleness window");
     }
 

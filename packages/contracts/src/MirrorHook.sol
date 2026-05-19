@@ -56,6 +56,7 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
     event SisterNotificationReceived(uint32 indexed origin, bytes32 indexed sender, bytes32 pairId, uint256 reportedDepth);
     event AuthorizedSenderUpdated(bytes32 indexed sender, bool authorized);
     event DispatchCooldownUpdated(uint256 oldSeconds, uint256 newSeconds);
+    event SisterDepthStalenessUpdated(uint256 oldSeconds, uint256 newSeconds);
     event DispatchFailed(uint32 indexed destinationDomain, bytes32 pairId, bytes reason);
     event GuardianUpdated(address indexed oldGuardian, address indexed newGuardian);
     event MaxSisterDepthMultipleUpdated(uint256 oldMultiple, uint256 newMultiple);
@@ -657,8 +658,6 @@ contract MirrorHook is BaseHook, Ownable, Pausable, ReentrancyGuard, IMessageRec
         emit DispatchCooldownUpdated(dispatchCooldown, seconds_);
         dispatchCooldown = seconds_;
     }
-
-    event SisterDepthStalenessUpdated(uint256 oldSeconds, uint256 newSeconds);
 
     function setSisterDepthStaleness(uint256 seconds_) external onlyOwner {
         emit SisterDepthStalenessUpdated(sisterDepthStaleness, seconds_);
