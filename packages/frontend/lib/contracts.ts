@@ -85,10 +85,9 @@ const erc20Abi = parseAbi([
 ]);
 
 // ─── Pool IDs (canonical V4 keccak of (currency0,currency1,fee,tickSpacing,hook)) ──
-function poolIdFor(chain: "base" | "eth"): `0x${string}` {
+function poolIdFor(chain: "base" | "eth", hook: Address): `0x${string}` {
   const t0 = chain === "base" ? ADDR.base.usdc : ADDR.eth.usdc;
   const t1 = chain === "base" ? ADDR.base.weth : ADDR.eth.weth;
-  const hook = chain === "base" ? ADDR.base.hook : ADDR.eth.hook;
   return keccak256(
     encodeAbiParameters(
       parseAbiParameters("address, address, uint24, int24, address"),
@@ -96,9 +95,18 @@ function poolIdFor(chain: "base" | "eth"): `0x${string}` {
     )
   );
 }
+// Mirv's pool IDs (with our MirrorHook attached)
 export const POOL_ID = {
-  base: poolIdFor("base"),
-  eth:  poolIdFor("eth"),
+  base: poolIdFor("base", ADDR.base.hook),
+  eth:  poolIdFor("eth",  ADDR.eth.hook),
+};
+// Canonical Uniswap pool IDs on each chain (no hook = 0x0). 8.5.2 — read these
+// to compute our pool's competitiveness ratio. If our depth << canonical, no
+// router will quote us, regardless of how good the swarm's coordination is.
+const ZERO_HOOK = "0x0000000000000000000000000000000000000000" as Address;
+export const CANONICAL_POOL_ID = {
+  base: poolIdFor("base", ZERO_HOOK),
+  eth:  poolIdFor("eth",  ZERO_HOOK),
 };
 
 // ─── Aggregated dashboard read ─────────────────────────────────────────────
@@ -107,6 +115,7 @@ export async function readDashboardState() {
     totalAssets, totalSupply, paused, principal, crossChain, lastUpdate, lastHarvest,
     baseDepth, ethDepth,
     baseLiquidity, ethLiquidity,
+    baseCanonicalLiquidity, ethCanonicalLiquidity,
     baseCfg, ethCfg,
     baseHookEth, ethHookEth,
     baseHookPaused, ethHookPaused,
@@ -123,6 +132,11 @@ export async function readDashboardState() {
     ethClient.readContract({ address: ADDR.eth.hook, abi: hookAbi, functionName: "localDepthUsd", args: [POOL_ID.eth] }),
     baseClient.readContract({ address: ADDR.base.stateView, abi: stateViewAbi, functionName: "getLiquidity", args: [POOL_ID.base] }),
     ethClient.readContract({ address: ADDR.eth.stateView, abi: stateViewAbi, functionName: "getLiquidity", args: [POOL_ID.eth] }),
+    // 8.5.2 — canonical pool L on each chain. Compare ours vs theirs to compute
+    // a competitiveness ratio. A pool with depth far below the canonical Uniswap
+    // pool won't get routed to, no matter how good our cross-chain coordination is.
+    baseClient.readContract({ address: ADDR.base.stateView, abi: stateViewAbi, functionName: "getLiquidity", args: [CANONICAL_POOL_ID.base] }).catch(() => 0n),
+    ethClient.readContract({ address: ADDR.eth.stateView, abi: stateViewAbi, functionName: "getLiquidity", args: [CANONICAL_POOL_ID.eth] }).catch(() => 0n),
     baseClient.readContract({ address: ADDR.base.vault, abi: vaultAbi, functionName: "getChainConfig", args: [84532] }),
     baseClient.readContract({ address: ADDR.base.vault, abi: vaultAbi, functionName: "getChainConfig", args: [11155111] }),
     baseClient.getBalance({ address: ADDR.base.hook }),
@@ -132,10 +146,22 @@ export async function readDashboardState() {
     baseClient.readContract({ address: ADDR.base.hook, abi: hookAbi, functionName: "dispatchCooldown" }),
   ]);
 
+  // Competitiveness ratio: our pool's L vs the canonical pool's L on the same
+  // chain. Capped at 100% since we can't be more competitive than ourselves
+  // for routing purposes once depth crosses the canonical mark.
+  const baseCompetitivenessPct = baseCanonicalLiquidity > 0n
+    ? Math.min(100, Number(baseLiquidity * 10000n / baseCanonicalLiquidity) / 100)
+    : (baseLiquidity > 0n ? 100 : 0);
+  const ethCompetitivenessPct = ethCanonicalLiquidity > 0n
+    ? Math.min(100, Number(ethLiquidity * 10000n / ethCanonicalLiquidity) / 100)
+    : (ethLiquidity > 0n ? 100 : 0);
+
   return {
     totalAssets, totalSupply, paused, principal, crossChain, lastUpdate, lastHarvest,
     baseDepth, ethDepth,
     baseLiquidity, ethLiquidity,
+    baseCanonicalLiquidity, ethCanonicalLiquidity,
+    baseCompetitivenessPct, ethCompetitivenessPct,
     baseAllocBps: baseCfg[4],
     ethAllocBps: ethCfg[4],
     baseHookEth, ethHookEth,

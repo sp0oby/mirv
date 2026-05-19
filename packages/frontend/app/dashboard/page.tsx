@@ -153,6 +153,43 @@ export default async function DashboardPage() {
         </p>
       </section>
 
+      {/* ─── Competitiveness vs canonical pool ─────────────────────────── */}
+      <section className="mb-12">
+        <h2 className="font-maru text-[20px] font-semibold text-ink mb-5">
+          ✦ how competitive are we against the canonical pool
+        </h2>
+        <p className="text-[13px] text-ink-soft mb-4 max-w-[64ch]">
+          our pool vs the canonical (no-hook) Uniswap USDC/WETH pool on the same chain. routers only quote pools deep enough to be competitive — if we're at &lt; 10% we need more seed depth, not more rebalancing.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {state && [
+            { chain: "Base",     pct: state.baseCompetitivenessPct, ourL: state.baseLiquidity, theirL: state.baseCanonicalLiquidity },
+            { chain: "Ethereum", pct: state.ethCompetitivenessPct,  ourL: state.ethLiquidity,  theirL: state.ethCanonicalLiquidity  },
+          ].map((c) => {
+            const ok = c.pct >= 10;
+            return (
+              <div key={c.chain} className="frame-outer p-5">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-maru text-[15px] text-ink font-semibold">{c.chain}</span>
+                  <span className={`font-mono text-[13px] ${ok ? "text-mint-deep" : "text-pink-hot"}`}>
+                    {c.pct.toFixed(c.pct < 1 ? 4 : 2)}%
+                  </span>
+                </div>
+                <div className="h-2 rounded-full overflow-hidden bg-paper-deep border border-ink-soft/40 mb-2">
+                  <div className="h-full" style={{ width: `${Math.min(100, c.pct)}%`, background: ok ? "#aaf0d1" : "#ef48aa" }} />
+                </div>
+                <p className="text-[11px] text-ink-faint font-mono">
+                  our L: {c.ourL.toString()} · canonical L: {c.theirL.toString()}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-[12px] text-ink-faint mt-3">
+          the swarm reads this every cycle. if competitiveness on any chain is below 10%, it flags "seed depth needed" rather than rebalancing dust.
+        </p>
+      </section>
+
       {/* ─── Health strip ──────────────────────────────────────────────── */}
       <section className="mb-12">
         <h2 className="font-maru text-[20px] font-semibold text-ink mb-5">

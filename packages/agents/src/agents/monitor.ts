@@ -228,6 +228,50 @@ const toolHandlers: Record<string, (input: any) => Promise<unknown>> = {
   },
 };
 
+// 8.5.2 — direct (non-LLM) read of the canonical no-hook USDC/WETH pool on
+// the same chain. We call this server-side before invoking Claude so the
+// agent gets canonical depth as known context without burning tokens to
+// fetch it. Mirrors the getPoolState tool logic but only returns depth.
+async function readCanonicalDepth(chain: Chain, token0: string, token1: string, feeTier: number, tickSpacing: number): Promise<number> {
+  try {
+    const client    = clients[chain as keyof typeof clients];
+    const stateView = STATE_VIEWS[chain];
+    const ZERO_HOOK = "0x0000000000000000000000000000000000000000" as Address;
+    const poolId = keccak256(encodeAbiParameters(
+      parseAbiParameters("address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks"),
+      [token0 as Address, token1 as Address, feeTier, tickSpacing, ZERO_HOOK]
+    ));
+    const chainlinkFeed = chain === "bnb"
+      ? (process.env.CHAINLINK_ETH_USD_BNB ?? "")
+      : IS_SEPOLIA
+        ? (process.env[`CHAINLINK_ETH_USD_${chain === "ethereum" ? "ETH_SEPOLIA" : "BASE_SEPOLIA"}`] ?? "")
+        : (process.env[`CHAINLINK_ETH_USD_${chain === "ethereum" ? "MAINNET" : "BASE"}`] ?? "");
+    const [slot0, liquidity, dec0, dec1, clRound, clDecimals] = await Promise.all([
+      client.readContract({ address: stateView, abi: stateViewAbi, functionName: "getSlot0",     args: [poolId] }),
+      client.readContract({ address: stateView, abi: stateViewAbi, functionName: "getLiquidity", args: [poolId] }),
+      client.readContract({ address: token0 as Address, abi: erc20Abi, functionName: "decimals" }),
+      client.readContract({ address: token1 as Address, abi: erc20Abi, functionName: "decimals" }),
+      client.readContract({ address: chainlinkFeed as Address, abi: chainlinkAbi, functionName: "latestRoundData" }),
+      client.readContract({ address: chainlinkFeed as Address, abi: chainlinkAbi, functionName: "decimals" }),
+    ]);
+    const ethUsd = Number(clRound[1]) / 10 ** Number(clDecimals);
+    const dec0n = Number(dec0);
+    const dec1n = Number(dec1);
+    const token0IsStable = dec0n === 6 && dec1n === 18;
+    const tvl = estimatePoolTvl({
+      sqrtPriceX96:   slot0[0],
+      liquidity:      liquidity,
+      token0Decimals: dec0n,
+      token1Decimals: dec1n,
+      token0PriceUsd: token0IsStable ? 1 : ethUsd,
+      token1PriceUsd: token0IsStable ? ethUsd : 1,
+    });
+    return Math.round(tvl.tvlUsd);
+  } catch {
+    return 0;
+  }
+}
+
 export async function runMonitorAgent(
   chain: Chain,
   _state: MirrorState
@@ -272,6 +316,12 @@ export async function runMonitorAgent(
   const tokens = process.env.NETWORK === "sepolia" ? SEPOLIA_TOKENS : MAINNET_TOKENS;
 
   const t = tokens[chain];
+
+  // 8.5.2 — read the canonical (no-hook) pool depth on this chain in parallel
+  // with the LLM cycle. Lets the agent know how competitive mirv's pool is.
+  const canonicalDepthUsd = await readCanonicalDepth(chain, t.token0, t.token1, 3000, 60);
+  console.log(`  [monitor:${chain}] canonical pool depth=$${canonicalDepthUsd}`);
+
   const prompt = `Monitor the ETH/USDC pool on ${chain}. You are responsible for ONE chain only: ${chain}.
 
 Pool parameters:
@@ -281,18 +331,23 @@ Pool parameters:
 - tickSpacing: 60
 - hook:   ${hookAddress}
 
-INSTRUCTIONS — exactly two tool calls, in this order:
-1. CALL getPoolState({chain: "${chain}", token0: "${t.token0}", token1: "${t.token1}", feeTier: 3000, tickSpacing: 60, hookAddress: "${hookAddress}"})
+Known canonical-pool depth on this chain (no-hook USDC/WETH at fee=3000, tickSpacing=60): $${canonicalDepthUsd}
+This was read server-side; do NOT call getPoolState a second time for the canonical pool. Use this number directly.
+
+INSTRUCTIONS — at most two tool calls, in this order:
+1. CALL getPoolState({chain: "${chain}", token0: "${t.token0}", token1: "${t.token1}", feeTier: 3000, tickSpacing: 60, hookAddress: "${hookAddress}"}) — reads OUR hooked pool depth.
 2. (Optional) CALL getChainlinkPrice({chain: "${chain}", feedAddress: "${chainlinkFeed}"}) — only if you need to verify the ETH/USD price the pool TVL math used.
 
-DO NOT call getPoolState for any chain other than ${chain}. Sister-chain depths come from parallel monitor agents via the shared state, not from this agent. Calling getPoolState with a different chain wastes tokens and returns errors because token addresses differ across chains.
+DO NOT call getPoolState for any chain other than ${chain}. Sister-chain depths come from parallel monitor agents via the shared state.
 
-Use the tool's returned depthUsd directly — DO NOT recompute the TVL math yourself.
+Compute competitivenessPct = (localDepthUsd / max(canonicalDepthUsd, 1)) × 100.
 
-If depthUsd is non-zero, treat this chain as having real liquidity.
-If depthUsd is 0 (pool not initialized or no liquidity), report localDepthUsd: 0.
+Set actionNeeded=true if:
+- THIS chain's depth changed meaningfully vs the prior cycle, OR
+- this chain reports 0 unexpectedly, OR
+- competitivenessPct < 10 — we're not competitive enough for routers to quote us; flag for seed-depth attention rather than rebalancing dust.
 
-For imbalance assessment: report your own chain's depth honestly. Sister comparison happens upstream by the RebalanceAgent across all monitor outputs. Set actionNeeded=true ONLY if THIS chain's depth changed meaningfully vs the prior cycle (price/volume drift) OR if this chain reports 0 unexpectedly.
+In your output JSON include canonicalDepthUsd: ${canonicalDepthUsd} and your computed competitivenessPct.
 
 Output ONLY a MonitorResult JSON, no other text.`;
 
@@ -310,7 +365,14 @@ Output ONLY a MonitorResult JSON, no other text.`;
 
     const match = response.match(/\{[\s\S]*\}/);
     parsed = JSON.parse(match?.[0] ?? response) as MonitorResult;
-    console.log(`  [monitor:${chain}] depth=$${parsed.localDepthUsd?.toFixed(0) ?? 'NaN'} imbalance=${parsed.imbalancePct?.toFixed(2) ?? 'NaN'}% action=${parsed.actionNeeded}`);
+    // Guarantee canonical fields are set even if Claude omits them.
+    if (parsed.canonicalDepthUsd === undefined) parsed.canonicalDepthUsd = canonicalDepthUsd;
+    if (parsed.competitivenessPct === undefined) {
+      parsed.competitivenessPct = canonicalDepthUsd > 0
+        ? Math.round((parsed.localDepthUsd / canonicalDepthUsd) * 100 * 100) / 100
+        : 0;
+    }
+    console.log(`  [monitor:${chain}] depth=$${parsed.localDepthUsd?.toFixed(0) ?? 'NaN'} canonical=$${canonicalDepthUsd} competitiveness=${parsed.competitivenessPct?.toFixed(2)}% action=${parsed.actionNeeded}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.log(`  [monitor:${chain}] CAUGHT — ${msg.slice(0, 200)}`);
@@ -327,6 +389,8 @@ Output ONLY a MonitorResult JSON, no other text.`;
       currentFeeTier: 3000,
       actionNeeded: false,
       summary: `Error on ${chain}: ${msg.slice(0, 120)}`,
+      canonicalDepthUsd,
+      competitivenessPct: 0,
     };
   }
 

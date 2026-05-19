@@ -557,21 +557,21 @@ through us; with $500k–$1M per chain, we show up in quotes.
       gas + tick range + LP math at non-toy amounts
 - [ ] Document the LP unwind path if mainnet is paused for any reason
 
-### 8.5.2 Canonical-pool monitoring (agent intelligence upgrade #1)
+### 8.5.2 Canonical-pool monitoring (agent intelligence upgrade #1) ✅ shipped 2026-05-19
 
 **Why:** Today the agents only see inside our own pools. If our pool has
 1/10th the canonical Uniswap pool's depth, the swarm should recognize it
 and adjust — not just blindly rebalance the small amount we have.
 
-- [ ] Add `getCanonicalPoolState(chain)` tool to monitor agent (same as
-      `getPoolState` but with `hookAddress = 0x0`)
-- [ ] Extend `MonitorResult` state to include `canonicalDepthUsd` per chain
-- [ ] Update rebalance agent prompt to factor in canonical depth ratio:
-      "if our depth is < 10% of canonical, we're not competitive — flag,
-      don't rebalance"
-- [ ] Risk agent prompt: add veto rule for "non-competitive on both chains"
-- [ ] Wire into a new "competitiveness score" on the dashboard
-- [ ] Unit tests for the new monitor tool
+- [x] Direct `readCanonicalDepth()` helper in `monitor.ts` reads no-hook pool
+      depth server-side (no Claude token cost per cycle)
+- [x] Extend `MonitorResult` state to include `canonicalDepthUsd` + `competitivenessPct`
+- [x] Update monitor prompt to pass canonical depth into Claude's context
+- [x] Update rebalance agent prompt with competitiveness guard:
+      "if any chain has competitivenessPct < 10%, action=none + flag seed-depth"
+- [ ] Risk agent prompt: add veto rule for "non-competitive on both chains" (deferred — rebalance guard already prevents action)
+- [x] Wire into a new "competitiveness vs canonical pool" section on the dashboard
+- [ ] Unit tests for the new monitor helper
 
 ### 8.5.3 Cross-pool tick alignment (agent intelligence upgrade #2)
 

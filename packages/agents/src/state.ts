@@ -6,18 +6,24 @@ export type Pair  = "ETH/USDC" | "USDC/USDT";
 
 // ─── Monitor output ───────────────────────────────────────────────────────────
 export interface MonitorResult {
-  chain:           Chain;
-  pair:            Pair;
-  timestamp:       number;
-  localDepthUsd:   number;
-  sisterDepths:    Record<Chain, number>;
-  imbalancePct:    number;
-  priceDriftPct:   number;
-  currentTickLow:  number;
-  currentTickHigh: number;
-  currentFeeTier:  number;
-  actionNeeded:    boolean;
-  summary:         string;
+  chain:               Chain;
+  pair:                Pair;
+  timestamp:           number;
+  localDepthUsd:       number;
+  sisterDepths:        Record<Chain, number>;
+  imbalancePct:        number;
+  priceDriftPct:       number;
+  currentTickLow:      number;
+  currentTickHigh:     number;
+  currentFeeTier:      number;
+  actionNeeded:        boolean;
+  summary:             string;
+  // 8.5.2 — canonical-pool awareness. Read the no-hook canonical pool on the
+  // same chain so the agents can see how competitive mirv's pool is. If we're
+  // at <10% of canonical depth, no router will quote us and rebalancing tiny
+  // amounts doesn't matter — flag for seed-depth attention instead.
+  canonicalDepthUsd?:   number;
+  competitivenessPct?:  number; // (localDepthUsd / canonicalDepthUsd) × 100
 }
 
 // ─── Rebalance proposal ───────────────────────────────────────────────────────

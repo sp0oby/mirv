@@ -11,13 +11,21 @@ export async function runRebalanceAgent(state: MirrorState): Promise<Partial<Mir
   }
 
   const totalTvl = monitors.reduce((sum, m) => sum + m.localDepthUsd, 0);
+  const minCompetitiveness = Math.min(...monitors.map((m) => m.competitivenessPct ?? 0));
+
   const prompt = `Monitor results from this cycle:
 ${JSON.stringify(monitors, null, 2)}
 
 Total mirrored TVL: $${totalTvl.toLocaleString()}
 Max single move: 2% = $${(totalTvl * 0.02).toLocaleString()}
+Min competitiveness across chains: ${minCompetitiveness.toFixed(2)}%
 
-Calculate the optimal rebalance. Consider all three chains.
+COMPETITIVENESS GUARD: If any chain has competitivenessPct < 10%, we're below
+the depth threshold where routers will quote us. In that case, set
+action="none" and reasoning should flag "non-competitive on chain X — seed depth needed
+before rebalancing matters." Don't waste gas + bridge fees shuffling tiny amounts.
+
+Otherwise, calculate the optimal rebalance. Consider all monitored chains.
 Estimate amounts in token units (USDC has 6 decimals, WETH has 18 decimals).
 Output the RebalanceProposal JSON only — no other text.`;
 
