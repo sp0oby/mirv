@@ -535,6 +535,158 @@ mirv agent → x402 proxy (claude-proxy.mirv.xyz) → Anthropic API
 
 ---
 
+## Phase 8.5 — Pre-Mainnet Adoption (the protocol must be useful + profitable on day one)
+
+These are the work items that block mainnet from being commercially viable.
+Without them mirv ships as "two empty pools on two chains" and depositors
+earn nothing because no router quotes us. Each item below has concrete sub-tasks.
+
+### 8.5.1 Treasury seed-depth strategy
+
+**Why:** Routers (Uniswap Universal Router, 1inch, Matcha, CowSwap) only quote
+pools deep enough to be competitive. With $20 in our pool, nobody routes
+through us; with $500k–$1M per chain, we show up in quotes.
+
+- [ ] Decide target seed depth per chain at launch ($500k? $1M? higher?)
+- [ ] Calculate USDC + WETH ratio required (matched at current ETH price)
+- [ ] Source funding — grant + initial team capital + (later) protocol earnings
+- [ ] Treasury Safe (Gnosis) holds the funds before deployment
+- [ ] Write `scripts/seed-launch-liquidity.s.sol` — single forge script that
+      adds matched LP to Base + Ethereum mirv pools on launch day
+- [ ] Dry-run on Sepolia at scale (e.g. seed with 5k testnet USDC) to verify
+      gas + tick range + LP math at non-toy amounts
+- [ ] Document the LP unwind path if mainnet is paused for any reason
+
+### 8.5.2 Canonical-pool monitoring (agent intelligence upgrade #1)
+
+**Why:** Today the agents only see inside our own pools. If our pool has
+1/10th the canonical Uniswap pool's depth, the swarm should recognize it
+and adjust — not just blindly rebalance the small amount we have.
+
+- [ ] Add `getCanonicalPoolState(chain)` tool to monitor agent (same as
+      `getPoolState` but with `hookAddress = 0x0`)
+- [ ] Extend `MonitorResult` state to include `canonicalDepthUsd` per chain
+- [ ] Update rebalance agent prompt to factor in canonical depth ratio:
+      "if our depth is < 10% of canonical, we're not competitive — flag,
+      don't rebalance"
+- [ ] Risk agent prompt: add veto rule for "non-competitive on both chains"
+- [ ] Wire into a new "competitiveness score" on the dashboard
+- [ ] Unit tests for the new monitor tool
+
+### 8.5.3 Cross-pool tick alignment (agent intelligence upgrade #2)
+
+**Why:** If price drifts outside our LP's tick range, our LP earns nothing
+until rebalanced. Currently we wait for the imbalance signal; smarter would
+be to detect drift from external pools as a leading indicator and re-center
+proactively.
+
+- [ ] Strategist agent reads canonical pool's current tick as reference price
+- [ ] Detect when our LP's tick range no longer brackets the canonical price
+- [ ] Add `recenterTicks` action type to `RebalanceProposal`
+- [ ] Risk agent guard: don't recenter more than once per cooldown window
+- [ ] On-chain action: agent calls `dispatchRebalance` with new `tickLower`/
+      `tickUpper`, relayer modifyLiquidity unwinds + re-adds at the new range
+- [ ] Fork test: simulate price drift, verify swarm recenters within N cycles
+
+### 8.5.4 Hook quoter interface for routers
+
+**Why:** This is what makes mirv ≠ "just another LP." A router calling
+`mirv.quoteEffectivePrice(...)` gets back an execution price that accounts
+for our cross-chain depth coordination. Nothing else exposes this.
+
+- [ ] Design `IMirrorHookQuoter` interface — single view function returning
+      effective execution price + the depth-distribution breakdown
+- [ ] Implement on `MirrorHook`: read `localDepthUsd` + `sisterDepths` for
+      every enabled sister, compute the routing-optimal split
+- [ ] Add fork tests proving quoter output matches actual cross-chain depth
+- [ ] Update `interfaces/IMirrorHook.sol` for integrators
+- [ ] Document the interface in `/docs` page on the frontend
+- [ ] Internal benchmark vs canonical Uniswap quote at various TVL ratios
+
+### 8.5.5 Router + aggregator outreach
+
+**Why:** No code change here, but the most important work item — getting
+the integrations that activate the protocol.
+
+- [ ] **Uniswap Universal Router quoter** — file an issue / PR on the V4
+      quoter repo to add hook-aware routing. Cite mirv as the first
+      cross-chain hook primitive it'd support.
+- [ ] **1inch** — apply for V4 hook allowlist; provide hook ABI + cross-chain
+      depth examples
+- [ ] **Matcha (0x)** — apply for V4 pool allowlist; provide quoter interface
+- [ ] **CowSwap** — apply for solver pool set; explain the cross-chain
+      arbitrage convergence benefit
+- [ ] **DefiLlama** — submit mirv as a yield aggregator + LP protocol
+- [ ] Document outcomes + outreach status in `partnerships.md`
+
+### 8.5.6 Direct integration partner pilots
+
+**Why:** Cross-chain swap UIs need exactly what we provide. Easier sells
+than aggregators because we solve a problem they already have.
+
+- [ ] **Across** — pitch mirv as backend cross-chain liquidity. Their relayer
+      could route through us for tighter spreads.
+- [ ] **deBridge** — same pitch
+- [ ] **LI.FI** — list mirv hook as a routing option in their aggregator
+- [ ] **Pendle / Yearn-style integration** — wrap mirvUSDC as a yield-bearing
+      asset usable in other protocols
+- [ ] **Wallet-level integration** — Trust Wallet, Rabby, Phantom (multichain
+      mode) — offer mirv as default cross-chain LP
+
+### 8.5.7 External audit (overlaps with Phase 6, re-emphasized here)
+
+**Why:** Mainnet launch is gated on this. Lock the engagement before all
+the integrations above land so we audit close-to-final bytecode.
+
+- [ ] Solicit quotes: Cantina, Spearbit, Trail of Bits, OpenZeppelin
+- [ ] Pick a firm by Phase 7 grant disbursement
+- [ ] Engagement starts ~4 weeks before target mainnet date
+- [ ] Bug bounty live on Cantina or Immunefi at audit completion
+
+### 8.5.8 Treasury multisig + governance
+
+**Why:** Single-EOA treasury is fine for testnet, unacceptable for mainnet.
+Wire up the existing 24h `TREASURY_TIMELOCK_DELAY` to a real timelock.
+
+- [ ] Deploy Gnosis Safe (2-of-3 or 3-of-5 — decide composition)
+- [ ] Deploy OZ Timelock with 24h delay
+- [ ] Treasury Safe owns the Timelock; Timelock owns the protocol's setter functions
+- [ ] Run `setTreasury(timelock)` on Vault to migrate authority
+- [ ] Run `setOwner(timelock)` on Hook + Factory + Relayer
+- [ ] Verify on-chain: every privileged role now points at the Timelock
+- [ ] Document the upgrade path + emergency stop procedure
+
+### Order of operations
+
+```
+8.5.7 audit engagement signed
+    ↓
+8.5.2 canonical-pool monitor  ─┐
+8.5.3 tick alignment           ├─ ship to testnet for soak before audit
+8.5.4 quoter interface         ─┘
+    ↓
+audit findings resolved
+    ↓
+8.5.5 outreach campaign starts (so integrations are ready at launch)
+8.5.6 partner pilots start
+    ↓
+8.5.8 treasury multisig migration
+8.5.1 seed-depth funding ready
+    ↓
+mainnet launch (Phase 9)
+```
+
+### Success criteria
+
+Mirv ships to mainnet only when these are true:
+- ≥1 router or aggregator has mirv's hook in their routing logic
+- ≥$500k matched liquidity ready to seed on launch day
+- Agents demonstrate canonical-pool awareness + tick recentering on testnet
+- Treasury authority is on a multisig, not an EOA
+- External audit findings resolved (Critical + High at minimum)
+
+---
+
 ## Phase 9 — Mainnet Launch
 
 ### Pre-flight
