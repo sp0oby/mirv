@@ -147,17 +147,20 @@ export async function readDashboardState() {
   ]);
 
   // Competitiveness ratio: our pool's L vs the canonical pool's L on the same
-  // chain. If canonical L is 0 — which is likely on testnet because no one
-  // has seeded the canonical Uniswap pool — we have nothing to compare
-  // against, so report `null` (frontend renders as "no reference pool").
+  // chain. Returns `null` when the canonical pool itself is too small to be
+  // a meaningful reference — which is the testnet reality. Below the
+  // threshold (1e15 = roughly $50k of LP at $2k ETH), both pools are toys
+  // and the ratio just says "two tiny numbers divided." Frontend renders
+  // null as a neutral "no meaningful reference" pill.
   // Capped at 100% since we can't be more competitive than ourselves for
   // routing purposes once depth crosses the canonical mark.
-  const baseCompetitivenessPct = baseCanonicalLiquidity > 0n
-    ? Math.min(100, Number(baseLiquidity * 10000n / baseCanonicalLiquidity) / 100)
-    : null;
-  const ethCompetitivenessPct = ethCanonicalLiquidity > 0n
-    ? Math.min(100, Number(ethLiquidity * 10000n / ethCanonicalLiquidity) / 100)
-    : null;
+  const MEANINGFUL_CANONICAL_L = 1_000_000_000_000_000n; // 1e15
+  function competitiveness(ourL: bigint, theirL: bigint): number | null {
+    if (theirL <= MEANINGFUL_CANONICAL_L) return null;
+    return Math.min(100, (Number(ourL) / Number(theirL)) * 100);
+  }
+  const baseCompetitivenessPct = competitiveness(baseLiquidity, baseCanonicalLiquidity);
+  const ethCompetitivenessPct  = competitiveness(ethLiquidity,  ethCanonicalLiquidity);
 
   return {
     totalAssets, totalSupply, paused, principal, crossChain, lastUpdate, lastHarvest,

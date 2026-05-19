@@ -173,7 +173,11 @@ export default async function DashboardPage() {
                 <div className="flex items-center justify-between mb-2">
                   <span className="font-maru text-[15px] text-ink font-semibold">{c.chain}</span>
                   <span className={`font-mono text-[13px] ${noReference ? "text-ink-faint" : ok ? "text-mint-deep" : "text-pink-hot"}`}>
-                    {noReference ? "no reference" : `${c.pct!.toFixed(c.pct! < 1 ? 4 : 2)}%`}
+                    {noReference
+                      ? "no reference"
+                      : c.pct! < 0.01
+                        ? "< 0.01%"
+                        : `${c.pct!.toFixed(c.pct! < 1 ? 4 : 2)}%`}
                   </span>
                 </div>
                 <div className="h-2 rounded-full overflow-hidden bg-paper-deep border border-ink-soft/40 mb-2">
