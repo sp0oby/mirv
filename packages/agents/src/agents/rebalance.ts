@@ -12,6 +12,7 @@ export async function runRebalanceAgent(state: MirrorState): Promise<Partial<Mir
 
   const totalTvl = monitors.reduce((sum, m) => sum + m.localDepthUsd, 0);
   const minCompetitiveness = Math.min(...monitors.map((m) => m.competitivenessPct ?? 0));
+  const outOfRangeChains = monitors.filter((m) => m.outOfRange === true);
 
   const prompt = `Monitor results from this cycle:
 ${JSON.stringify(monitors, null, 2)}
@@ -19,13 +20,27 @@ ${JSON.stringify(monitors, null, 2)}
 Total mirrored TVL: $${totalTvl.toLocaleString()}
 Max single move: 2% = $${(totalTvl * 0.02).toLocaleString()}
 Min competitiveness across chains: ${minCompetitiveness.toFixed(2)}%
+Chains with LP out of range: ${outOfRangeChains.length === 0 ? "none" : outOfRangeChains.map((m) => m.chain).join(", ")}
 
-COMPETITIVENESS GUARD: If any chain has competitivenessPct < 10%, we're below
-the depth threshold where routers will quote us. In that case, set
-action="none" and reasoning should flag "non-competitive on chain X — seed depth needed
-before rebalancing matters." Don't waste gas + bridge fees shuffling tiny amounts.
+ACTION SELECTION (in order of priority):
 
-Otherwise, calculate the optimal rebalance. Consider all monitored chains.
+1. COMPETITIVENESS GUARD: If any chain has competitivenessPct < 10%, set
+   action="none". Reasoning should flag "non-competitive on chain X — seed
+   depth needed before rebalancing matters." Don't waste gas + bridge fees
+   on dust.
+
+2. RECENTER TICKS (8.5.3): If a chain has outOfRange=true AND competitiveness
+   is ≥ 10%, set action="recenter" with:
+     - recenterChain = the out-of-range chain
+     - newTickLower / newTickUpper = a range that brackets the chain's
+       canonicalTick (e.g. tickLower = floor((canonicalTick - 4200) / 60) * 60,
+       tickUpper = floor((canonicalTick + 4200) / 60) * 60)
+   This shifts our LP back into range so we earn fees again. No cross-chain
+   USDC movement, just a local LP re-add.
+
+3. CROSS-CHAIN REBALANCE: If no recenter needed and depth is competitive,
+   calculate the optimal cross-chain rebalance based on relative imbalance.
+
 Estimate amounts in token units (USDC has 6 decimals, WETH has 18 decimals).
 Output the RebalanceProposal JSON only — no other text.`;
 

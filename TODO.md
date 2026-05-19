@@ -573,19 +573,24 @@ and adjust — not just blindly rebalance the small amount we have.
 - [x] Wire into a new "competitiveness vs canonical pool" section on the dashboard
 - [ ] Unit tests for the new monitor helper
 
-### 8.5.3 Cross-pool tick alignment (agent intelligence upgrade #2)
+### 8.5.3 Cross-pool tick alignment (agent intelligence upgrade #2) 🟡 intelligence shipped, execution path is a contract TODO
 
 **Why:** If price drifts outside our LP's tick range, our LP earns nothing
 until rebalanced. Currently we wait for the imbalance signal; smarter would
 be to detect drift from external pools as a leading indicator and re-center
 proactively.
 
-- [ ] Strategist agent reads canonical pool's current tick as reference price
-- [ ] Detect when our LP's tick range no longer brackets the canonical price
-- [ ] Add `recenterTicks` action type to `RebalanceProposal`
-- [ ] Risk agent guard: don't recenter more than once per cooldown window
-- [ ] On-chain action: agent calls `dispatchRebalance` with new `tickLower`/
-      `tickUpper`, relayer modifyLiquidity unwinds + re-adds at the new range
+- [x] Strategist agent reads canonical pool's current tick as reference price
+- [x] Monitor reports `canonicalTick` + computes `outOfRange` per chain
+- [x] Detect when our LP's tick range no longer brackets the canonical price
+      (sanity-checked server-side; agent JSON also computes)
+- [x] Add `recenter` action type to `RebalanceProposal` with `recenterChain` + new tick bounds
+- [x] Rebalance prompt: action selection priority — competitiveness guard → recenter → cross-chain
+- [x] Coordinator: detects recenter actions and records intent (does NOT broadcast cross-chain, since recenter is local)
+- [ ] **Contract change needed:** add `recenterLocal(int24 newLower, int24 newUpper)` entry point
+      on Relayer that pulls our existing LP and re-adds at new range (no cross-chain). Currently the
+      coordinator records the intent but no on-chain action fires until this lands.
+- [ ] Risk agent guard: don't recenter more than once per cooldown window (currently no recenter cooldown enforced)
 - [ ] Fork test: simulate price drift, verify swarm recenters within N cycles
 
 ### 8.5.4 Hook quoter interface for routers 🟡 designed + in source, not yet deployed

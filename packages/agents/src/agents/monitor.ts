@@ -228,11 +228,12 @@ const toolHandlers: Record<string, (input: any) => Promise<unknown>> = {
   },
 };
 
-// 8.5.2 — direct (non-LLM) read of the canonical no-hook USDC/WETH pool on
-// the same chain. We call this server-side before invoking Claude so the
-// agent gets canonical depth as known context without burning tokens to
-// fetch it. Mirrors the getPoolState tool logic but only returns depth.
-async function readCanonicalDepth(chain: Chain, token0: string, token1: string, feeTier: number, tickSpacing: number): Promise<number> {
+// 8.5.2 + 8.5.3 — direct (non-LLM) read of the canonical no-hook USDC/WETH
+// pool on the same chain. Returns BOTH depth (for competitiveness) and the
+// canonical tick (for tick-alignment drift detection). One read, two uses.
+async function readCanonicalState(
+  chain: Chain, token0: string, token1: string, feeTier: number, tickSpacing: number
+): Promise<{ depthUsd: number; tick: number | null }> {
   try {
     const client    = clients[chain as keyof typeof clients];
     const stateView = STATE_VIEWS[chain];
@@ -266,9 +267,9 @@ async function readCanonicalDepth(chain: Chain, token0: string, token1: string, 
       token0PriceUsd: token0IsStable ? 1 : ethUsd,
       token1PriceUsd: token0IsStable ? ethUsd : 1,
     });
-    return Math.round(tvl.tvlUsd);
+    return { depthUsd: Math.round(tvl.tvlUsd), tick: Number(slot0[1]) };
   } catch {
-    return 0;
+    return { depthUsd: 0, tick: null };
   }
 }
 
@@ -317,10 +318,12 @@ export async function runMonitorAgent(
 
   const t = tokens[chain];
 
-  // 8.5.2 — read the canonical (no-hook) pool depth on this chain in parallel
-  // with the LLM cycle. Lets the agent know how competitive mirv's pool is.
-  const canonicalDepthUsd = await readCanonicalDepth(chain, t.token0, t.token1, 3000, 60);
-  console.log(`  [monitor:${chain}] canonical pool depth=$${canonicalDepthUsd}`);
+  // 8.5.2 + 8.5.3 — read the canonical (no-hook) pool's depth AND current tick.
+  // Depth → competitiveness ratio. Tick → drift detection for LP re-centering.
+  const canonical = await readCanonicalState(chain, t.token0, t.token1, 3000, 60);
+  const canonicalDepthUsd = canonical.depthUsd;
+  const canonicalTick = canonical.tick;
+  console.log(`  [monitor:${chain}] canonical depth=$${canonicalDepthUsd} tick=${canonicalTick ?? "n/a"}`);
 
   const prompt = `Monitor the ETH/USDC pool on ${chain}. You are responsible for ONE chain only: ${chain}.
 
@@ -331,8 +334,10 @@ Pool parameters:
 - tickSpacing: 60
 - hook:   ${hookAddress}
 
-Known canonical-pool depth on this chain (no-hook USDC/WETH at fee=3000, tickSpacing=60): $${canonicalDepthUsd}
-This was read server-side; do NOT call getPoolState a second time for the canonical pool. Use this number directly.
+Known canonical-pool state on this chain (no-hook USDC/WETH at fee=3000, tickSpacing=60):
+  depth: $${canonicalDepthUsd}
+  current tick: ${canonicalTick ?? "unavailable"}
+This was read server-side; do NOT call getPoolState a second time for the canonical pool. Use these numbers directly.
 
 INSTRUCTIONS — at most two tool calls, in this order:
 1. CALL getPoolState({chain: "${chain}", token0: "${t.token0}", token1: "${t.token1}", feeTier: 3000, tickSpacing: 60, hookAddress: "${hookAddress}"}) — reads OUR hooked pool depth.
@@ -340,14 +345,23 @@ INSTRUCTIONS — at most two tool calls, in this order:
 
 DO NOT call getPoolState for any chain other than ${chain}. Sister-chain depths come from parallel monitor agents via the shared state.
 
-Compute competitivenessPct = (localDepthUsd / max(canonicalDepthUsd, 1)) × 100.
+Compute:
+- competitivenessPct = (localDepthUsd / max(canonicalDepthUsd, 1)) × 100
+- outOfRange = canonical tick is OUTSIDE [currentTickLow, currentTickHigh] of OUR pool
+  (canonicalTick=${canonicalTick ?? "null"}; if null, set outOfRange=false)
 
-Set actionNeeded=true if:
+Set actionNeeded=true if ANY of:
 - THIS chain's depth changed meaningfully vs the prior cycle, OR
 - this chain reports 0 unexpectedly, OR
-- competitivenessPct < 10 — we're not competitive enough for routers to quote us; flag for seed-depth attention rather than rebalancing dust.
+- competitivenessPct < 10 — we're not competitive enough for routers to quote us, OR
+- outOfRange === true — our LP range no longer brackets the canonical price; tick recenter is needed.
 
-In your output JSON include canonicalDepthUsd: ${canonicalDepthUsd} and your computed competitivenessPct.
+In your output JSON include:
+- canonicalDepthUsd: ${canonicalDepthUsd}
+- canonicalTick: ${canonicalTick ?? "null"}
+- competitivenessPct (computed)
+- outOfRange (computed)
+- ourTick: read from the getPoolState tool result's "tick" field
 
 Output ONLY a MonitorResult JSON, no other text.`;
 
@@ -365,14 +379,22 @@ Output ONLY a MonitorResult JSON, no other text.`;
 
     const match = response.match(/\{[\s\S]*\}/);
     parsed = JSON.parse(match?.[0] ?? response) as MonitorResult;
-    // Guarantee canonical fields are set even if Claude omits them.
+    // Guarantee canonical + tick fields are set even if Claude omits them.
     if (parsed.canonicalDepthUsd === undefined) parsed.canonicalDepthUsd = canonicalDepthUsd;
+    if (parsed.canonicalTick === undefined && canonicalTick !== null) {
+      parsed.canonicalTick = canonicalTick;
+    }
     if (parsed.competitivenessPct === undefined) {
       parsed.competitivenessPct = canonicalDepthUsd > 0
         ? Math.round((parsed.localDepthUsd / canonicalDepthUsd) * 100 * 100) / 100
         : 0;
     }
-    console.log(`  [monitor:${chain}] depth=$${parsed.localDepthUsd?.toFixed(0) ?? 'NaN'} canonical=$${canonicalDepthUsd} competitiveness=${parsed.competitivenessPct?.toFixed(2)}% action=${parsed.actionNeeded}`);
+    // Server-side compute outOfRange as a sanity check on Claude's compute.
+    if (canonicalTick !== null && parsed.currentTickLow !== undefined && parsed.currentTickHigh !== undefined) {
+      const isOut = canonicalTick < parsed.currentTickLow || canonicalTick > parsed.currentTickHigh;
+      parsed.outOfRange = isOut;
+    }
+    console.log(`  [monitor:${chain}] depth=$${parsed.localDepthUsd?.toFixed(0) ?? 'NaN'} canonical=$${canonicalDepthUsd} tick=${canonicalTick ?? "n/a"} outOfRange=${parsed.outOfRange ?? "?"} competitiveness=${parsed.competitivenessPct?.toFixed(2)}% action=${parsed.actionNeeded}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.log(`  [monitor:${chain}] CAUGHT — ${msg.slice(0, 200)}`);
@@ -391,6 +413,8 @@ Output ONLY a MonitorResult JSON, no other text.`;
       summary: `Error on ${chain}: ${msg.slice(0, 120)}`,
       canonicalDepthUsd,
       competitivenessPct: 0,
+      canonicalTick: canonicalTick ?? undefined,
+      outOfRange: false,
     };
   }
 

@@ -24,11 +24,23 @@ export interface MonitorResult {
   // amounts doesn't matter — flag for seed-depth attention instead.
   canonicalDepthUsd?:   number;
   competitivenessPct?:  number; // (localDepthUsd / canonicalDepthUsd) × 100
+  // 8.5.3 — tick alignment. The current tick of the canonical pool acts as
+  // a leading reference price. If our LP range no longer brackets this
+  // tick, we earn no fees until we recenter. The strategist uses these to
+  // detect drift before imbalance signals catch it.
+  canonicalTick?:       number; // current tick of canonical (no-hook) pool
+  ourTick?:             number; // current tick of mirv's hooked pool
+  outOfRange?:          boolean; // canonical tick outside [currentTickLow, currentTickHigh]
 }
 
 // ─── Rebalance proposal ───────────────────────────────────────────────────────
 export interface RebalanceProposal {
-  action:               "rebalance" | "none";
+  // 8.5.3 — "recenter" is the agent-only LP-range adjustment action: keep
+  // the same chain allocation but shift the tick range to bracket the
+  // canonical pool's current price. Doesn't move USDC cross-chain; just
+  // re-centers the local LP position. Lighter on bridge fees than "rebalance"
+  // and the right response to price drift inside a single chain.
+  action:               "rebalance" | "recenter" | "none";
   fromChain?:           Chain;
   toChains?:            Chain[];
   deltaToken0?:         string; // stringified bigint (token0 units)
@@ -36,6 +48,9 @@ export interface RebalanceProposal {
   newFee?:              number; // e.g. 0.0003 → 3000 bps
   newTickLower?:        number;
   newTickUpper?:        number;
+  // For recenter actions, the specific chain whose LP should be re-centered
+  // (other chains untouched).
+  recenterChain?:       Chain;
   expectedExtraYieldUsd?: number;
   reasoning:            string;
   riskLevel?:           "low" | "medium" | "high";

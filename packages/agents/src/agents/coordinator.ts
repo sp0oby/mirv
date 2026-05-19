@@ -66,6 +66,22 @@ Output the CoordinatorDecision JSON only — no other text.`;
   }
 
   if (decision.approved && decision.executeNow && state.riskAssessment?.veto === false) {
+    // 8.5.3 — tick recenter is a LOCAL LP-range adjustment (no cross-chain
+    // movement). The on-chain dispatch path (`hook.dispatchRebalance`) fires
+    // a cross-chain Hyperlane message, which is wrong for a local recenter.
+    // For now we record the intent but don't broadcast; a follow-up contract
+    // change will add a local `recenterLocal(int24,int24)` entry point.
+    if (proposal.action === "recenter") {
+      console.log(`  [coordinator] recenter proposed on ${proposal.recenterChain ?? "?"} (range [${proposal.newTickLower}, ${proposal.newTickUpper}]) — execution path is a contract-level TODO (8.5.3). Recording intent only.`);
+      return {
+        coordinatorDecision: decision,
+        executionResult: {
+          success: true,
+          timestamp: Date.now(),
+          error: "recenter execution path not yet on-chain — intent recorded",
+        },
+      };
+    }
     const result = await _executeOnChain(decision, proposal);
     return { coordinatorDecision: decision, executionResult: result };
   }
