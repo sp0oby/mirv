@@ -68,6 +68,36 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ─── Live stat strip — same 3 cards as dashboard's headline row ── */}
+      <section className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="frame-outer p-6" style={{ transform: "rotate(-0.5deg)" }}>
+          <p className="font-maru text-[13px] text-ink-faint uppercase tracking-wider mb-1">
+            ✿ total mirrored
+          </p>
+          <p className="pixel text-[40px] text-ink leading-tight">$8,256</p>
+          <p className="text-[13px] text-ink-soft mt-1">usdc across 2 chains</p>
+        </div>
+
+        <div className="frame-outer p-6 bg-paper-warm" style={{ transform: "rotate(0.6deg)" }}>
+          <p className="font-maru text-[13px] text-ink-faint uppercase tracking-wider mb-1">
+            ❀ extra apy (7d)
+          </p>
+          <p className="pixel text-[40px] text-ink leading-tight">—</p>
+          <p className="text-[13px] text-ink-soft mt-1">no harvest yet</p>
+        </div>
+
+        <div className="frame-outer p-6" style={{ transform: "rotate(-0.4deg)" }}>
+          <p className="font-maru text-[13px] text-ink-faint uppercase tracking-wider mb-1">
+            ✦ swarm
+          </p>
+          <p className="pixel text-[40px] text-ink leading-tight inline-flex items-center gap-2">
+            calm
+            <span className="w-3 h-3 rounded-full bg-mint-deep animate-heartbeat inline-block" />
+          </p>
+          <p className="text-[13px] text-ink-soft mt-1">last cycle 2m ago</p>
+        </div>
+      </section>
+
       {/* ─── 3-step quiet explainer ────────────────────────────────────── */}
       <section className="mt-24">
         <h2 className="font-maru text-[22px] font-semibold text-ink mb-8">
@@ -93,6 +123,79 @@ export default function LandingPage() {
             </article>
           ))}
         </div>
+      </section>
+
+      {/* ─── The swarm ─────────────────────────────────────────────────── */}
+      <section className="mt-24">
+        <h2 className="font-maru text-[22px] font-semibold text-ink mb-2">
+          ✦ &nbsp;the swarm
+        </h2>
+        <p className="text-[15px] text-ink-soft mb-8 max-w-[60ch]">
+          four agents work the pools 24/7. every 45 seconds they read live
+          state, decide if there's a rebalance worth making, and execute
+          across chains.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+          {[
+            {
+              tag: "monitor",
+              count: "×2",
+              title: "the readers",
+              body:
+                "one per chain. they watch pool depth and price. report back what each side looks like.",
+              bg: "#ffd1dc",
+              tilt: -1.2,
+            },
+            {
+              tag: "rebalance",
+              count: "×1",
+              title: "the strategist",
+              body:
+                "compares the chains. if the imbalance is real, plans a move — how much, which tick range.",
+              bg: "#bde0fe",
+              tilt: 0.8,
+            },
+            {
+              tag: "risk",
+              count: "×1",
+              title: "the veto",
+              body:
+                "double-checks every plan. blocks moves that are too large, react to bad prices, or fire too often.",
+              bg: "#ffd206",
+              tilt: -0.6,
+            },
+            {
+              tag: "coordinator",
+              count: "×1",
+              title: "the hand",
+              body:
+                "the only one that signs transactions. executes the plan once risk clears, pays the bridge fee.",
+              bg: "#aaf0d1",
+              tilt: 1.1,
+            },
+          ].map((a) => (
+            <article
+              key={a.tag}
+              className="frame-outer p-5"
+              style={{ transform: `rotate(${a.tilt}deg)`, background: a.bg }}
+            >
+              <div className="flex items-baseline justify-between mb-1.5">
+                <p className="pixel text-[11px] text-ink-faint uppercase tracking-wider">
+                  {a.tag}
+                </p>
+                <span className="font-display text-[14px] text-ink-soft">{a.count}</span>
+              </div>
+              <h3 className="font-maru text-[17px] font-semibold text-ink mb-2">{a.title}</h3>
+              <p className="text-[13.5px] text-ink leading-snug">{a.body}</p>
+            </article>
+          ))}
+        </div>
+
+        <p className="text-[14px] text-ink-soft mt-6 max-w-[60ch]">
+          every decision they make is public. see them on the{" "}
+          <Link href="/activity" className="underline text-pink-hot">activity feed →</Link>
+        </p>
       </section>
 
       {/* ─── Status strip ──────────────────────────────────────────────── */}
