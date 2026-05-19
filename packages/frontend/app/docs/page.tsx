@@ -235,17 +235,33 @@ export default function DocsPage() {
         <p className="text-[15px] text-ink-soft leading-relaxed mb-3 max-w-[70ch]">
           mirv's interesting trick is that depth isn't a per-chain phenomenon
           anymore. The <code className="font-mono text-[13.5px]">MirrorHook</code> exposes
-          a cross-chain depth primitive that any contract on either chain can read:
+          a cross-chain depth primitive that any contract on either chain can read,
+          packaged behind a single quoter interface:
         </p>
-        <pre className="font-mono text-[12.5px] bg-paper-deep text-ink-soft p-4 rounded mb-3 overflow-x-auto border border-ink-soft/30">
-{`function localDepthUsd(bytes32 poolId) external view returns (uint256);
-function sisterDepths(uint32 domain, bytes32 pairId) external view returns (uint256);`}
+        <pre className="font-mono text-[12.5px] bg-paper-deep text-ink-soft p-4 rounded mb-4 overflow-x-auto border border-ink-soft/30">
+{`// IMirrorHookQuoter — the "menu" routers + aggregators call
+function quoteCrossChainPool(bytes32 poolId)
+  external view returns (CrossChainQuote memory);
+
+struct CrossChainQuote {
+  uint256  localDepthUsd;
+  uint256  sisterChainsCount;
+  uint256[] sisterDepthsUsd;
+  uint32[]  sisterDomainIds;
+  uint256  totalCrossChainDepthUsd;
+  uint256  crossChainAdvantageBps;  // local vs best sister
+  bool     reliable;
+}`}
         </pre>
         <p className="text-[15px] text-ink-soft leading-relaxed mb-3 max-w-[70ch]">
-          So a swap router building a multi-chain quote, or a different hook
-          on a third pool, can read what depth is available <em>across</em>
-          mirv's pools without running a custom indexer. Cross-chain liquidity
-          becomes a callable thing.
+          One call, one struct, the entire cross-chain depth picture. No
+          off-chain indexer required. ~10k gas at 0 sisters, ~12k with one.
+          Suitable for inclusion in a V4 quoter's hot path.
+        </p>
+        <p className="text-[15px] text-ink-soft leading-relaxed mb-3 max-w-[70ch]">
+          A reference router-side caller ships at <code className="font-mono text-[13px]">examples/ExampleRouterIntegration.sol</code> in the repo
+          with two patterns: <code className="font-mono text-[13px]">shouldRouteThroughMirv()</code> (yes/no for a given swap size) and
+          <code className="font-mono text-[13px]">findDeepestChain()</code> (best sister to route through).
         </p>
         <p className="text-[15px] text-ink-soft leading-relaxed max-w-[70ch]">
           V4 pool identity is{" "}

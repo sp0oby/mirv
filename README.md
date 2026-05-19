@@ -174,6 +174,53 @@ needs router integration and meaningful seed depth — both work that happens
 
 ---
 
+## The integration story — how a router would actually use mirv
+
+We ship an interface, `IMirrorHookQuoter`, that any swap router, aggregator,
+or intent solver can call to get mirv's cross-chain depth in a single
+external view. It's the primitive that makes mirv a *routing layer* rather
+than just "a multi-chain LP."
+
+Think of it as three layers:
+
+| layer | what it is |
+|---|---|
+| `MirrorHook.sol` | The on-chain contract that knows what's in our pools and across sister chains |
+| `IMirrorHookQuoter.sol` | The public "menu" of questions external contracts can ask the hook — e.g. "what's your total cross-chain depth for this pool?" |
+| `examples/ExampleRouterIntegration.sol` | A reference demo showing how a router would consume that menu in ~30 lines |
+
+The reference integration has two functions any V4 router would adapt:
+
+```solidity
+// "given a $X swap, should I route through mirv?"
+shouldRouteThroughMirv(hook, poolId, amountInUsd) returns (bool, uint256);
+
+// "which chain has the most depth right now?"
+findDeepestChain(hook, poolId) returns (uint32 domain, uint256 depthUsd);
+```
+
+The `quoteCrossChainPool(poolId)` call returns one struct with everything a
+router needs: local depth, depth on each sister chain, total cross-chain
+depth, a relative-advantage ratio, and a reliability flag. ~10k gas at 0
+sisters; ~12k with one sister. Suitable for inclusion in the V4 quoter's
+hot path.
+
+This is what unlocks the chain-of-events:
+1. Uniswap's Universal Router (or 1inch / Matcha / CowSwap) adds mirv's
+   hook to its quoter logic — calls `quoteCrossChainPool` when it sees a
+   mirv-hooked pool
+2. The router gets back our combined cross-chain depth and decides whether
+   to route through us
+3. Real swap volume hits our pools
+4. The swarm has something to optimize
+5. Depositors earn extra yield from the captured fees
+
+Without this primitive, no router would know mirv's pool offers something
+the canonical pool doesn't. With it, mirv becomes a cross-chain primitive
+the V4 ecosystem can consume rather than a closed system.
+
+---
+
 ## Longer version
 
 **mirv** (short for **mir**rored **v**ault) is a fully autonomous cross-chain liquidity protocol built on Uniswap V4. A public ERC-4626 vault on Base accepts a single USDC deposit; the protocol then bridges proportional amounts to sister chains via Circle CCTP and adds mirrored LP positions on each chain's V4 pool, keeping them synchronized in near-real-time through a swarm of LLM-powered agents.
