@@ -653,4 +653,77 @@ contract MirrorVaultTest is TestBase {
         vm.prank(alice);
         vault.redeem(aliceShares, alice, alice);
     }
+
+    // ─── Local LP Relayer forwarding (8.5.9 home-chain auto-LP) ──────────────
+
+    function test_setLocalLpRelayer_ownerOnly() public {
+        address fakeRelayer = makeAddr("lp-relayer");
+
+        // Non-owner reverts
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.setLocalLpRelayer(fakeRelayer);
+
+        // Owner can update + state persists
+        vm.prank(owner);
+        vault.setLocalLpRelayer(fakeRelayer);
+        assertEq(vault.localLpRelayer(), fakeRelayer, "setter must persist");
+
+        // Owner can clear to zero
+        vm.prank(owner);
+        vault.setLocalLpRelayer(address(0));
+        assertEq(vault.localLpRelayer(), address(0), "owner can clear to zero");
+    }
+
+    function test_depositDoesNotForwardWhenLocalLpRelayerUnset() public {
+        // Default state: localLpRelayer is zero, so deposits should NOT auto-forward.
+        _approveVault(alice, 1000e6);
+        vm.prank(alice);
+        vault.deposit(1000e6, alice);
+
+        // No chains configured, so the full deposit stays in the vault.
+        assertEq(token0.balanceOf(address(vault)), 1000e6, "vault holds full deposit");
+    }
+
+    function test_depositForwardsLocalShareWhenLocalLpRelayerSet() public {
+        // Configure: one sister chain at 40%, local share is the remaining 60%.
+        address lpRelayer = makeAddr("base-lp-relayer");
+        bytes32 sisterRecipient = bytes32(uint256(uint160(makeAddr("eth-relayer"))));
+
+        vm.startPrank(owner);
+        vault.addChain(uint32(11155111), uint32(0), sisterRecipient, address(0), bytes32(0), uint16(4_000));
+        vault.setLocalLpRelayer(lpRelayer);
+        vm.stopPrank();
+
+        _approveVault(alice, 1000e6);
+
+        uint256 lpRelayerBefore = token0.balanceOf(lpRelayer);
+
+        vm.prank(alice);
+        vault.deposit(1000e6, alice);
+
+        // 40% of 1000e6 = 400e6 was sent to the sister via CCTP (mock messenger
+        // pulls the tokens; they leave the vault).
+        // Remaining 60% = 600e6 should be forwarded to the local LP relayer.
+        uint256 lpRelayerAfter = token0.balanceOf(lpRelayer);
+        assertEq(lpRelayerAfter - lpRelayerBefore, 600e6, "local share must be forwarded to lp relayer");
+
+        // Vault should now hold no local USDC (everything either bridged or forwarded).
+        assertEq(token0.balanceOf(address(vault)), 0, "vault retains no idle USDC after deposit");
+    }
+
+    function test_depositForwardsAllWhenNoChainsConfigured() public {
+        // Edge case: no sister chains enabled, localLpRelayer is set.
+        // Whole deposit should forward to the LP relayer.
+        address lpRelayer = makeAddr("base-lp-relayer-2");
+        vm.prank(owner);
+        vault.setLocalLpRelayer(lpRelayer);
+
+        _approveVault(alice, 500e6);
+        vm.prank(alice);
+        vault.deposit(500e6, alice);
+
+        assertEq(token0.balanceOf(lpRelayer), 500e6, "no sisters configured -> full deposit forwarded");
+        assertEq(token0.balanceOf(address(vault)), 0, "vault has no idle USDC");
+    }
 }

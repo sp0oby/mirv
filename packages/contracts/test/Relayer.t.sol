@@ -275,4 +275,97 @@ contract RelayerTest is Test {
         vm.prank(alice);
         relayer.unlockCallback("");
     }
+
+    // ─── Agent-callable provideLiquidity (8.5.9 home-chain auto-LP path) ─────
+
+    function test_setAgentAuthorizationByOwner() public {
+        address agentEoa = makeAddr("agent");
+        vm.prank(owner);
+        relayer.setAgentAuthorization(agentEoa, true);
+        assertTrue(relayer.authorizedAgents(agentEoa), "owner can authorize agent");
+
+        vm.prank(owner);
+        relayer.setAgentAuthorization(agentEoa, false);
+        assertFalse(relayer.authorizedAgents(agentEoa), "owner can revoke agent");
+    }
+
+    function test_setAgentAuthorizationNonOwnerReverts() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        relayer.setAgentAuthorization(makeAddr("agent"), true);
+    }
+
+    function test_setAgentAuthorizationZeroAddressReverts() public {
+        vm.prank(owner);
+        vm.expectRevert(Relayer.ZeroAddress.selector);
+        relayer.setAgentAuthorization(address(0), true);
+    }
+
+    function test_provideLiquidityRevertsForUnauthorizedAgent() public {
+        bytes32 pairId = keccak256("test-pair");
+        vm.prank(alice);
+        vm.expectRevert(Relayer.NotAuthorizedAgent.selector);
+        relayer.provideLiquidity(pairId, int128(1000), int128(1000), -60, 60);
+    }
+
+    function test_provideLiquidityRevertsIfPoolNotRegistered() public {
+        address agentEoa = makeAddr("agent");
+        vm.prank(owner);
+        relayer.setAgentAuthorization(agentEoa, true);
+
+        bytes32 unregisteredPair = keccak256("never-registered");
+        vm.prank(agentEoa);
+        vm.expectRevert(Relayer.PoolNotRegistered.selector);
+        relayer.provideLiquidity(unregisteredPair, int128(1000), int128(1000), -60, 60);
+    }
+
+    function test_provideLiquidityZeroDeltaShortCircuits() public {
+        // Zero-delta provideLiquidity should emit RebalanceSkippedZeroDelta
+        // and return cleanly without touching the pool manager — same path as
+        // the cross-chain handle() route.
+        address agentEoa = makeAddr("agent");
+        bytes32 pairId = keccak256("local-pair");
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(makeAddr("t0")),
+            currency1: Currency.wrap(makeAddr("t1")),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(makeAddr("hook"))
+        });
+
+        vm.startPrank(owner);
+        relayer.registerPool(pairId, key);
+        relayer.setAgentAuthorization(agentEoa, true);
+        vm.stopPrank();
+
+        vm.expectEmit(true, false, false, false);
+        emit RebalanceSkippedZeroDelta(pairId);
+
+        vm.prank(agentEoa);
+        relayer.provideLiquidity(pairId, 0, 0, -60, 60);
+    }
+
+    function test_provideLiquidityRevertsWhenPaused() public {
+        address agentEoa = makeAddr("agent");
+        bytes32 pairId = keccak256("p");
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(makeAddr("t0")),
+            currency1: Currency.wrap(makeAddr("t1")),
+            fee: 3000, tickSpacing: 60,
+            hooks: IHooks(makeAddr("hook"))
+        });
+        vm.startPrank(owner);
+        relayer.registerPool(pairId, key);
+        relayer.setAgentAuthorization(agentEoa, true);
+        relayer.pause();
+        vm.stopPrank();
+
+        vm.prank(agentEoa);
+        vm.expectRevert(); // EnforcedPause from OZ Pausable
+        relayer.provideLiquidity(pairId, 0, 0, -60, 60);
+    }
+
+    /// @dev Mirror of the event the contract emits; we don't import directly because the
+    ///      Relayer event is internal-namespace.
+    event RebalanceSkippedZeroDelta(bytes32 indexed pairId);
 }

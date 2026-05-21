@@ -152,6 +152,18 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     /// @notice AI agent addresses authorized to call privileged functions
     mapping(address => bool) public authorizedAgents;
 
+    /// @notice Local-chain LP-provider contract (a Relayer deployed on Base).
+    ///         When set, `_splitAndBridge` forwards the remaining local-share
+    ///         USDC to this address after CCTP-bridging the sister-chain
+    ///         allocations. Without it, the local share sits idle in the vault
+    ///         and earns nothing — closes the "home-chain auto-LP" gap.
+    /// @dev    Same role as sister-chain Relayers but on the home chain, so
+    ///         it skips Hyperlane and is called directly by the agent's
+    ///         `provideLiquidity` path.
+    address public localLpRelayer;
+    event LocalLpRelayerUpdated(address indexed oldRelayer, address indexed newRelayer);
+    event LocalLpForwarded(address indexed lpRelayer, uint256 amount);
+
     /// @notice USD-equivalent value of LP positions held cross-chain plus
     ///         in-flight CCTP bridge legs (asset decimals — for USDC vault: 1e6).
     ///         Updated by CoordinatorAgent each cycle via updateCrossChainAssets.
@@ -539,6 +551,37 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
                 emit CctpBridgeSkipped(cfg.cctpDomain, cfg.cctpRecipient, alloc, reason);
             }
         }
+
+        // Local-chain LP forwarding. After all sister bridges, any USDC still
+        // attributable to THIS deposit (= totalAmount minus the sum of bridged
+        // allocations) is the home-chain share. Forward it to the local LP
+        // Relayer so the agent can turn it into LP without delay. Without this
+        // the local share sits idle in the vault, the depositor's funds earn
+        // zero on the home chain, and totalAssets stays misleadingly high.
+        //
+        // We compute "what's left for the local share" as
+        //   localShare = totalAmount - Σ(allocBps_i × totalAmount / MAX_BPS)
+        // and transfer that amount. This is independent of the vault's
+        // existing USDC balance (which may include yield from withdrawals or
+        // earlier deposits not yet swept).
+        if (localLpRelayer != address(0)) {
+            uint256 bridgedTotal = 0;
+            for (uint256 i; i < len; ++i) {
+                ChainConfig memory cfg = chainConfigs[enabledDomains[i]];
+                // Only count allocations that actually had a CCTP route (i.e.
+                // we attempted a bridge). Failed bridges (caught above) are
+                // counted as "stays in vault" already, so subtracting them
+                // here would double-deduct.
+                if (cfg.cctpRecipient != bytes32(0) || cfg.cctpDomain != 0) {
+                    bridgedTotal += (totalAmount * cfg.allocationBps) / MAX_BPS;
+                }
+            }
+            if (totalAmount > bridgedTotal) {
+                uint256 localShare = totalAmount - bridgedTotal;
+                IERC20(asset()).safeTransfer(localLpRelayer, localShare);
+                emit LocalLpForwarded(localLpRelayer, localShare);
+            }
+        }
     }
 
     /// @dev Accrue baseline yield since last snapshot into baselineYieldAccrued
@@ -592,6 +635,18 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     function setCrossChainAssetsMaxStaleness(uint256 newSeconds) external onlyOwner {
         emit CrossChainAssetsMaxStalenessUpdated(crossChainAssetsMaxStaleness, newSeconds);
         crossChainAssetsMaxStaleness = newSeconds;
+    }
+
+    /// @notice Owner-only setter for the home-chain LP-provider (a Relayer on
+    ///         Base). When non-zero, each user deposit's local-allocation share
+    ///         is forwarded to this address so the agent can `provideLiquidity`
+    ///         on it immediately. Set to zero to disable (USDC stays in vault).
+    /// @dev    Use a contract that the agent is authorized on. Misconfiguring
+    ///         this to an EOA would forward user deposits to an arbitrary
+    ///         account; verify the address before setting.
+    function setLocalLpRelayer(address newRelayer) external onlyOwner {
+        emit LocalLpRelayerUpdated(localLpRelayer, newRelayer);
+        localLpRelayer = newRelayer;
     }
 
     /// @notice Step 1 of the timelocked treasury rotation (R-5). Records the

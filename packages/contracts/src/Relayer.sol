@@ -33,6 +33,7 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
     // ─── Errors ─────────────────────────────────────────────────────────────
     error NotMailbox();
     error NotAuthorizedSender();
+    error NotAuthorizedAgent();
     error ZeroAddress();
     error InvalidPayload();
     error InsufficientFunds();
@@ -240,7 +241,61 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
         return isAdd ? int256(uint256(liquidity)) : -int256(uint256(liquidity));
     }
 
+    // ─── Agent-callable local LP path ────────────────────────────────────────
+
+    /// @notice Authorized agents may direct this Relayer to modify LP positions
+    ///         WITHOUT going through Hyperlane. Use case: the home-chain Relayer
+    ///         can be called by the agent right after a CCTP-bridged deposit
+    ///         (or a same-chain transfer from the Vault) to turn idle inventory
+    ///         into earning LP positions. No cross-chain message required;
+    ///         skips the dispatch fee + the ~30s Hyperlane delivery delay.
+    /// @dev    Same execution path as `_executeRebalance` for cross-chain calls,
+    ///         so the agent-callable path inherits identical safety properties
+    ///         (zero-delta short-circuit, V4 unlock/settle dance, sign-correct
+    ///         settle/take). Authorized to agent EOA via `authorizedAgents`.
+    /// @param  pairId       Pool pair id to operate on (must be registerPool'd).
+    /// @param  deltaToken0  Positive to add, negative to remove (token0 units).
+    /// @param  deltaToken1  Positive to add, negative to remove (token1 units).
+    /// @param  tickLower    Lower tick of the position.
+    /// @param  tickUpper    Upper tick of the position.
+    function provideLiquidity(
+        bytes32 pairId,
+        int128 deltaToken0,
+        int128 deltaToken1,
+        int24 tickLower,
+        int24 tickUpper
+    ) external whenNotPaused nonReentrant {
+        if (!authorizedAgents[msg.sender]) revert NotAuthorizedAgent();
+        if (!_registered[pairId]) revert PoolNotRegistered();
+
+        RebalanceMessage memory rm = RebalanceMessage({
+            pairId: pairId,
+            deltaToken0: deltaToken0,
+            deltaToken1: deltaToken1,
+            newFee: 0,        // unused by _executeRebalance
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            minExpectedYield: 0,
+            currentDepth: 0
+        });
+
+        _executeRebalance(rm);
+    }
+
     // ─── Admin ───────────────────────────────────────────────────────────────
+
+    /// @notice Authorized AI agent addresses (Coordinator hot wallet) that may
+    ///         call `provideLiquidity` directly. Separate from `authorizedSenders`
+    ///         (which gates inbound Hyperlane handle() calls).
+    mapping(address => bool) public authorizedAgents;
+
+    event AgentAuthorizationUpdated(address indexed agent, bool authorized);
+
+    function setAgentAuthorization(address agent, bool authorized) external onlyOwner {
+        if (agent == address(0)) revert ZeroAddress();
+        authorizedAgents[agent] = authorized;
+        emit AgentAuthorizationUpdated(agent, authorized);
+    }
 
     /// @notice Register a pool pair that this Relayer is allowed to manage
     function registerPool(bytes32 pairId, PoolKey calldata key) external onlyOwner {
