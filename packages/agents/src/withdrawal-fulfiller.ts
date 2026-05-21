@@ -23,6 +23,7 @@
 import { createPublicClient, createWalletClient, http, parseAbi, parseAbiItem, type Address } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { chainFor } from "./chains.js";
+import { getInProgressUnwind, recordUnwindInitiated, clearUnwind } from "./unwind-state.js";
 
 const vaultAbi = parseAbi([
   "function fulfillWithdraw(uint256 requestId) external",
@@ -190,12 +191,32 @@ export async function runWithdrawalFulfiller(opts?: {
     }
 
     if (decision === "needs-cross-chain-unwind") {
+      // Check whether we've already initiated the unwind in a prior cycle.
+      // If yes, skip and wait for CCTP attestation. If timed out (>30 min),
+      // the tracker auto-evicts and we'll re-initiate this cycle.
+      const inProgress = getInProgressUnwind(idStr);
+      if (inProgress) {
+        const waitSec = Math.max(0, Math.floor((inProgress.expectedFulfillByMs - Date.now()) / 1000));
+        report.pending.push({
+          requestId: idStr,
+          reason: `cross-chain unwind in flight from ${inProgress.chain}; ~${waitSec}s until CCTP completes`,
+        });
+        console.log(`  [withdrawal-fulfiller] request ${idStr} unwind in flight (~${waitSec}s remaining)`);
+        continue;
+      }
+
+      // Not in-progress — initiate. The actual on-chain calls (provideLiquidity
+      // on a sister Relayer + bridgeUsdcHome) belong in coordinator.ts because
+      // they need wagmi clients + signing. For now we just record the intent
+      // + mark in-progress; a follow-up commit ties the orchestration in.
+      const amountNeeded = assetsOwed - vaultUsdcBalance;
       report.pending.push({
         requestId: idStr,
-        reason: `vault has ${vaultUsdcBalance} USDC; needs ${assetsOwed} — requires cross-chain unwind (TODO)`,
+        reason: `vault has ${vaultUsdcBalance} USDC; needs ${assetsOwed} — initiating cross-chain unwind for ${amountNeeded}`,
       });
+      recordUnwindInitiated(idStr, "ethereum", amountNeeded);
       const ageSeconds = Math.floor(Date.now() / 1000) - Number(createdAt);
-      console.log(`  [withdrawal-fulfiller] request ${idStr} needs cross-chain unwind (${ageSeconds}s old)`);
+      console.log(`  [withdrawal-fulfiller] request ${idStr} unwind initiated (${ageSeconds}s old) — ${amountNeeded} USDC from ethereum`);
       continue;
     }
 
@@ -210,6 +231,8 @@ export async function runWithdrawalFulfiller(opts?: {
       });
       const txHash = await walletClient.writeContract(request);
       console.log(`  [withdrawal-fulfiller] fulfilled request ${idStr} -> tx ${txHash}`);
+      // Release the in-progress tracker if this was an unwind that landed.
+      clearUnwind(idStr);
       report.fulfilled.push({
         requestId: idStr,
         txHash,
