@@ -1,6 +1,7 @@
 import { callClaude } from "../llm.js";
 import { RISK_PROMPT } from "../prompts/loader.js";
 import { extractJson } from "../utils/parseJson.js";
+import { wasRecentRecenter, lastRecenterAt, RECENTER_COOLDOWN_SECONDS } from "../recenter-cooldown.js";
 import type { MirrorState, RiskAssessment } from "../state.js";
 import { loadCycleHistory } from "../tools/redis.js";
 
@@ -51,6 +52,24 @@ Assess all veto conditions. Calculate risk score. Output RiskAssessment JSON onl
     assessment.vetoReason = `${failedMonitors} monitors offline — cannot safely rebalance`;
     assessment.recommendedAction = "pause_all";
     assessment.globalRiskScore = Math.max(assessment.globalRiskScore, 0.9);
+  }
+
+  // 8.5.3 — recenter cooldown guard. If the proposed action is a recenter
+  // and we already recentered on the same chain within the cooldown window,
+  // veto. Prevents wobble around the new tick range from triggering a
+  // recenter every cycle.
+  const proposal = state.rebalanceProposal;
+  if (proposal?.action === "recenter" && proposal.recenterChain) {
+    const chain = proposal.recenterChain;
+    if (wasRecentRecenter(chain)) {
+      const lastMs = lastRecenterAt(chain);
+      const ageSeconds = lastMs ? Math.floor((Date.now() - lastMs) / 1000) : 0;
+      assessment.veto = true;
+      assessment.vetoReason =
+        `recenter on ${chain} fired ${ageSeconds}s ago — cooldown ${RECENTER_COOLDOWN_SECONDS}s`;
+      assessment.status = assessment.status === "red" ? "red" : "yellow";
+      console.log(`  [risk] recenter cooldown veto: ${assessment.vetoReason}`);
+    }
   }
 
   console.log(`[Risk] status=${assessment.status} veto=${assessment.veto} score=${assessment.globalRiskScore}`);

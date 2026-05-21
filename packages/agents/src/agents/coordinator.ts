@@ -8,6 +8,7 @@ import { callClaude } from "../llm.js";
 import { COORDINATOR_PROMPT } from "../prompts/loader.js";
 import { chainFor } from "../chains.js";
 import { extractJson } from "../utils/parseJson.js";
+import { recordRecenter } from "../recenter-cooldown.js";
 import type { MirrorState, CoordinatorDecision } from "../state.js";
 
 const mirrorHookAbi = parseAbi([
@@ -200,6 +201,9 @@ async function _executeRecenter(
     });
     const txHash = await walletClient.writeContract(request);
     console.log(`[Coordinator] recenter on ${targetChain} tx: ${txHash}`);
+    // Record the recenter timestamp so risk-agent vetoes subsequent
+    // recenter proposals within the cooldown window.
+    recordRecenter(targetChain);
     return { success: true, txHash, timestamp: Date.now() };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
