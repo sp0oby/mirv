@@ -35,6 +35,11 @@ const vaultAbi = parseAbi([
 
 const usdcAbi = parseAbi(["function balanceOf(address) view returns (uint256)"]);
 
+const relayerUnwindAbi = parseAbi([
+  "function provideLiquidity(bytes32 pairId, int128 deltaToken0, int128 deltaToken1, int24 tickLower, int24 tickUpper) external",
+  "function bridgeUsdcHome(uint256 amount) external",
+]);
+
 // Vault event signature. Captured by the monitor's getLogs sweep.
 const withdrawRequestedEvent = parseAbiItem(
   "event WithdrawRequested(uint256 indexed requestId, address indexed requester, address indexed receiver, uint256 shares, uint256 expectedAssets)"
@@ -205,18 +210,24 @@ export async function runWithdrawalFulfiller(opts?: {
         continue;
       }
 
-      // Not in-progress — initiate. The actual on-chain calls (provideLiquidity
-      // on a sister Relayer + bridgeUsdcHome) belong in coordinator.ts because
-      // they need wagmi clients + signing. For now we just record the intent
-      // + mark in-progress; a follow-up commit ties the orchestration in.
+      // Not in-progress — initiate. Two on-chain txs on the sister chain:
+      //   1. Relayer.provideLiquidity(-d0, -d1) — pull LP out, release tokens
+      //   2. Relayer.bridgeUsdcHome(amount)    — CCTP-burn USDC home
       const amountNeeded = assetsOwed - vaultUsdcBalance;
-      report.pending.push({
-        requestId: idStr,
-        reason: `vault has ${vaultUsdcBalance} USDC; needs ${assetsOwed} — initiating cross-chain unwind for ${amountNeeded}`,
-      });
-      recordUnwindInitiated(idStr, "ethereum", amountNeeded);
+      const initiated    = await _initiateCrossChainUnwind(idStr, amountNeeded, account);
+
+      if (initiated.success) {
+        recordUnwindInitiated(idStr, "ethereum", amountNeeded);
+        report.pending.push({
+          requestId: idStr,
+          reason: `cross-chain unwind initiated: provideLiq tx ${initiated.provideLiqTx} + bridge tx ${initiated.bridgeTx}; CCTP attestation ~20 min`,
+        });
+      } else {
+        report.errors.push(`unwind initiation for ${idStr} failed: ${initiated.error}`);
+        console.log(`  [withdrawal-fulfiller] unwind ${idStr} failed: ${initiated.error}`);
+      }
       const ageSeconds = Math.floor(Date.now() / 1000) - Number(createdAt);
-      console.log(`  [withdrawal-fulfiller] request ${idStr} unwind initiated (${ageSeconds}s old) — ${amountNeeded} USDC from ethereum`);
+      console.log(`  [withdrawal-fulfiller] request ${idStr} (${ageSeconds}s old) — needs ${amountNeeded} USDC from ethereum`);
       continue;
     }
 
@@ -247,4 +258,86 @@ export async function runWithdrawalFulfiller(opts?: {
   }
 
   return report;
+}
+
+/// Sister-chain unwind orchestration. Two sequential on-chain calls:
+///   1. provideLiquidity(-d0, -d1) on the sister Relayer — removes LP,
+///      releases USDC + WETH back into the Relayer's own balance.
+///   2. bridgeUsdcHome(amount) on the sister Relayer — CCTP-burns the
+///      released USDC with the Base vault as mint recipient.
+///
+/// Delta computation: we approximate the WETH amount paired with `amount`
+/// USDC at the current ETH/USD price (sourced from env or fallback). The
+/// agent's existing monitor reads canonical pool tick; future work could
+/// derive precise deltas from the sister Relayer's actual position state.
+async function _initiateCrossChainUnwind(
+  requestId: string,
+  amountUsdcRaw: bigint,
+  account: { address: `0x${string}` } & ReturnType<typeof privateKeyToAccount>
+): Promise<{ success: true; provideLiqTx: string; bridgeTx: string } | { success: false; error: string }> {
+  const relayerAddr = process.env.RELAYER_MAINNET as Address | undefined;
+  const rpcUrl      = process.env.ALCHEMY_MAINNET_URL as string | undefined;
+  if (!relayerAddr || !rpcUrl) {
+    return { success: false, error: "RELAYER_MAINNET or ALCHEMY_MAINNET_URL not set" };
+  }
+
+  const sisterChain  = chainFor("ethereum");
+  const publicClient = createPublicClient({ chain: sisterChain, transport: http(rpcUrl) });
+  const walletClient = createWalletClient({ chain: sisterChain, account, transport: http(rpcUrl) });
+
+  const pairId = (process.env.CANONICAL_PAIR_ID ??
+    "0x7a00c543412ae44415418950dc1ea26ae8977c50cbcec8035a5d99a911085b04") as `0x${string}`;
+  // Approximate WETH equivalent of `amountUsdcRaw` at current ETH price.
+  // ETH_PRICE_USD overrideable via env; default 3000 is a reasonable mainnet
+  // fallback (and on testnet the exact value barely matters — we just need
+  // proportional deltas for the LP-remove math to find a reasonable L).
+  const ethPriceUsd = BigInt(process.env.ETH_PRICE_USD ?? "3000");
+  // amount * 1e18 / (ethPrice * 1e6) = amount * 1e12 / ethPrice
+  const wethWei = (amountUsdcRaw * 1_000_000_000_000n) / ethPriceUsd;
+
+  const negD0 = -wethWei;
+  const negD1 = -amountUsdcRaw;
+  // Use a wide-enough tick range to match wherever the LP is currently sitting.
+  // Future: read the relayer's actual position range from chain.
+  const tickLower = -120;
+  const tickUpper = 120;
+
+  // Step 1: pull LP
+  let provideLiqTx: string;
+  try {
+    const { request } = await publicClient.simulateContract({
+      account,
+      address:      relayerAddr,
+      abi:          relayerUnwindAbi,
+      functionName: "provideLiquidity",
+      args:         [pairId, negD0, negD1, tickLower, tickUpper],
+      gas: 1_000_000n,
+    });
+    provideLiqTx = await walletClient.writeContract(request);
+    console.log(`  [withdrawal-fulfiller] step 1 provideLiquidity(-d) tx: ${provideLiqTx}`);
+  } catch (err) {
+    return { success: false, error: `step 1 provideLiq failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  // Step 2: CCTP-burn USDC home
+  let bridgeTx: string;
+  try {
+    const { request } = await publicClient.simulateContract({
+      account,
+      address:      relayerAddr,
+      abi:          relayerUnwindAbi,
+      functionName: "bridgeUsdcHome",
+      args:         [amountUsdcRaw],
+      gas: 500_000n,
+    });
+    bridgeTx = await walletClient.writeContract(request);
+    console.log(`  [withdrawal-fulfiller] step 2 bridgeUsdcHome tx: ${bridgeTx}`);
+  } catch (err) {
+    // Step 1 already removed LP into the Relayer's balance; step 2 failure
+    // means the USDC sits at the Relayer. Future cycle can re-attempt
+    // bridgeUsdcHome — record the partial state.
+    return { success: false, error: `step 2 bridge failed (LP already removed; USDC sits at Relayer): ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  return { success: true, provideLiqTx, bridgeTx };
 }
