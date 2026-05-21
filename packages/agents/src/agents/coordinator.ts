@@ -7,6 +7,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { callClaude } from "../llm.js";
 import { COORDINATOR_PROMPT } from "../prompts/loader.js";
 import { chainFor } from "../chains.js";
+import { extractJson } from "../utils/parseJson.js";
 import type { MirrorState, CoordinatorDecision } from "../state.js";
 
 const mirrorHookAbi = parseAbi([
@@ -59,8 +60,7 @@ Output the CoordinatorDecision JSON only — no other text.`;
       maxTokens:  1024,
       agentLabel: "coordinator",
     });
-    const match = response.match(/\{[\s\S]*\}/);
-    decision = JSON.parse(match?.[0] ?? response) as CoordinatorDecision;
+    decision = extractJson<CoordinatorDecision>(response);
     console.log(`  [coordinator] approved=${decision.approved} executeNow=${decision.executeNow} reasoning="${(decision.reasoning ?? '').slice(0, 80)}"`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

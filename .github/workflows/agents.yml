@@ -30,3 +30,7 @@ jobs:
       - name: tsc --noEmit (agents)
         working-directory: packages/agents
         run: npx tsc --noEmit
+
+      - name: vitest (agents)
+        working-directory: packages/agents
+        run: yarn test

@@ -5,6 +5,7 @@ import {
 import type Anthropic from "@anthropic-ai/sdk";
 import { callClaudeWithTools } from "../llm.js";
 import { MONITOR_PROMPT } from "../prompts/loader.js";
+import { extractJson } from "../utils/parseJson.js";
 import type { MirrorState, MonitorResult, Chain } from "../state.js";
 import { chainFor } from "../chains.js";
 
@@ -453,8 +454,7 @@ Output ONLY a MonitorResult JSON, no other text.`;
       agentLabel:   `monitor:${chain}`,
     });
 
-    const match = response.match(/\{[\s\S]*\}/);
-    parsed = JSON.parse(match?.[0] ?? response) as MonitorResult;
+    parsed = extractJson<MonitorResult>(response);
     // Guarantee canonical + tick fields are set even if Claude omits them.
     if (parsed.canonicalDepthUsd === undefined) parsed.canonicalDepthUsd = canonicalDepthUsd;
     if (parsed.canonicalTick === undefined && canonicalTick !== null) {

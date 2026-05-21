@@ -1,5 +1,6 @@
 import { callClaude } from "../llm.js";
 import { RISK_PROMPT } from "../prompts/loader.js";
+import { extractJson } from "../utils/parseJson.js";
 import type { MirrorState, RiskAssessment } from "../state.js";
 import { loadCycleHistory } from "../tools/redis.js";
 
@@ -30,8 +31,7 @@ Assess all veto conditions. Calculate risk score. Output RiskAssessment JSON onl
       maxTokens:  512,
       agentLabel: "risk",
     });
-    const match = response.match(/\{[\s\S]*\}/);
-    assessment = JSON.parse(match?.[0] ?? response) as RiskAssessment;
+    assessment = extractJson<RiskAssessment>(response);
     console.log(`  [risk] status=${assessment.status} veto=${assessment.veto} reason="${(assessment.vetoReason ?? '').slice(0, 80)}"`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

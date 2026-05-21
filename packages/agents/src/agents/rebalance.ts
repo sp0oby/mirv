@@ -1,5 +1,6 @@
 import { callClaude } from "../llm.js";
 import { REBALANCE_PROMPT } from "../prompts/loader.js";
+import { extractJson } from "../utils/parseJson.js";
 import type { MirrorState, RebalanceProposal } from "../state.js";
 
 export async function runRebalanceAgent(state: MirrorState): Promise<Partial<MirrorState>> {
@@ -81,8 +82,7 @@ Output the RebalanceProposal JSON only — no other text.`;
       maxTokens:  1024,
       agentLabel: "rebalance",
     });
-    const match = response.match(/\{[\s\S]*\}/);
-    parsed = JSON.parse(match?.[0] ?? response) as RebalanceProposal;
+    parsed = extractJson<RebalanceProposal>(response);
     console.log(`  [rebalance] action=${parsed.action} reasoning="${(parsed.reasoning ?? '').slice(0, 100)}"`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
