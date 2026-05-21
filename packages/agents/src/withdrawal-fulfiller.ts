@@ -89,6 +89,10 @@ export function decideFulfillment(
 /// @param lookbackBlocks Number of blocks back to scan for events. ~2000
 ///        ≈ 1 hour on Base at 2s blocks. Lower bound is "we already swept
 ///        this; nothing should be older than our cycle interval".
+// One-shot warning state so we don't spam the logs every 45s when env vars
+// aren't set. The feature stays disabled silently until the var appears.
+let _envWarnedOnce = false;
+
 export async function runWithdrawalFulfiller(opts?: {
   lookbackBlocks?: bigint;
 }): Promise<FulfillmentReport> {
@@ -97,7 +101,17 @@ export async function runWithdrawalFulfiller(opts?: {
   const vaultAddress = process.env.MIRROR_VAULT_BASE as Address;
   const usdcAddress  = process.env.USDC_BASE_SEPOLIA as Address ?? process.env.VAULT_ASSET_BASE as Address;
   if (!vaultAddress) {
-    report.errors.push("MIRROR_VAULT_BASE not set");
+    if (!_envWarnedOnce) {
+      console.warn("[withdrawal-fulfiller] MIRROR_VAULT_BASE not set — sweep disabled. Set the env to enable.");
+      _envWarnedOnce = true;
+    }
+    return report;
+  }
+  if (!usdcAddress) {
+    if (!_envWarnedOnce) {
+      console.warn("[withdrawal-fulfiller] USDC_BASE_SEPOLIA / VAULT_ASSET_BASE not set — sweep disabled.");
+      _envWarnedOnce = true;
+    }
     return report;
   }
 

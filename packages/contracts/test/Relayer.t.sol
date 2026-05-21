@@ -368,4 +368,125 @@ contract RelayerTest is Test {
     /// @dev Mirror of the event the contract emits; we don't import directly because the
     ///      Relayer event is internal-namespace.
     event RebalanceSkippedZeroDelta(bytes32 indexed pairId);
+
+    // ─── Recenter access control + validation (8.5.3 execution path) ─────────
+    //
+    // Full V4 modifyLiquidity execution tested via fork tests (TODO). Here we
+    // verify access control + input validation that doesn't need a real pool.
+
+    function test_recenterRevertsForUnauthorizedAgent() public {
+        bytes32 pairId = keccak256("test-pair");
+        vm.prank(alice);
+        vm.expectRevert(Relayer.NotAuthorizedAgent.selector);
+        relayer.recenter(pairId, -120, 120, -60, 60, int128(1000));
+    }
+
+    function test_recenterRevertsIfPoolNotRegistered() public {
+        address agentEoa = makeAddr("agent");
+        vm.prank(owner);
+        relayer.setAgentAuthorization(agentEoa, true);
+
+        bytes32 unregisteredPair = keccak256("never-registered");
+        vm.prank(agentEoa);
+        vm.expectRevert(Relayer.PoolNotRegistered.selector);
+        relayer.recenter(unregisteredPair, -120, 120, -60, 60, int128(1000));
+    }
+
+    function test_recenterRevertsOnZeroLiquidity() public {
+        address agentEoa = makeAddr("agent");
+        bytes32 pairId = keccak256("p");
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(makeAddr("t0")),
+            currency1: Currency.wrap(makeAddr("t1")),
+            fee: 3000, tickSpacing: 60,
+            hooks: IHooks(makeAddr("hook"))
+        });
+        vm.startPrank(owner);
+        relayer.registerPool(pairId, key);
+        relayer.setAgentAuthorization(agentEoa, true);
+        vm.stopPrank();
+
+        vm.prank(agentEoa);
+        vm.expectRevert(Relayer.InvalidLiquidity.selector);
+        relayer.recenter(pairId, -120, 120, -60, 60, 0);
+    }
+
+    function test_recenterRevertsOnNegativeLiquidity() public {
+        address agentEoa = makeAddr("agent");
+        bytes32 pairId = keccak256("p");
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(makeAddr("t0")),
+            currency1: Currency.wrap(makeAddr("t1")),
+            fee: 3000, tickSpacing: 60,
+            hooks: IHooks(makeAddr("hook"))
+        });
+        vm.startPrank(owner);
+        relayer.registerPool(pairId, key);
+        relayer.setAgentAuthorization(agentEoa, true);
+        vm.stopPrank();
+
+        vm.prank(agentEoa);
+        vm.expectRevert(Relayer.InvalidLiquidity.selector);
+        relayer.recenter(pairId, -120, 120, -60, 60, -1000);
+    }
+
+    function test_recenterRevertsOnInvalidOldTickRange() public {
+        address agentEoa = makeAddr("agent");
+        bytes32 pairId = keccak256("p");
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(makeAddr("t0")),
+            currency1: Currency.wrap(makeAddr("t1")),
+            fee: 3000, tickSpacing: 60,
+            hooks: IHooks(makeAddr("hook"))
+        });
+        vm.startPrank(owner);
+        relayer.registerPool(pairId, key);
+        relayer.setAgentAuthorization(agentEoa, true);
+        vm.stopPrank();
+
+        // oldLower >= oldUpper is invalid
+        vm.prank(agentEoa);
+        vm.expectRevert(Relayer.InvalidTickRange.selector);
+        relayer.recenter(pairId, 100, 50, -60, 60, int128(1000));
+    }
+
+    function test_recenterRevertsOnInvalidNewTickRange() public {
+        address agentEoa = makeAddr("agent");
+        bytes32 pairId = keccak256("p");
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(makeAddr("t0")),
+            currency1: Currency.wrap(makeAddr("t1")),
+            fee: 3000, tickSpacing: 60,
+            hooks: IHooks(makeAddr("hook"))
+        });
+        vm.startPrank(owner);
+        relayer.registerPool(pairId, key);
+        relayer.setAgentAuthorization(agentEoa, true);
+        vm.stopPrank();
+
+        // newLower == newUpper is invalid (degenerate, zero range)
+        vm.prank(agentEoa);
+        vm.expectRevert(Relayer.InvalidTickRange.selector);
+        relayer.recenter(pairId, -120, 120, 60, 60, int128(1000));
+    }
+
+    function test_recenterRevertsWhenPaused() public {
+        address agentEoa = makeAddr("agent");
+        bytes32 pairId = keccak256("p");
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(makeAddr("t0")),
+            currency1: Currency.wrap(makeAddr("t1")),
+            fee: 3000, tickSpacing: 60,
+            hooks: IHooks(makeAddr("hook"))
+        });
+        vm.startPrank(owner);
+        relayer.registerPool(pairId, key);
+        relayer.setAgentAuthorization(agentEoa, true);
+        relayer.pause();
+        vm.stopPrank();
+
+        vm.prank(agentEoa);
+        vm.expectRevert(); // EnforcedPause from OZ Pausable
+        relayer.recenter(pairId, -120, 120, -60, 60, int128(1000));
+    }
 }

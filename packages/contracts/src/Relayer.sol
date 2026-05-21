@@ -164,15 +164,65 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
     }
 
     /// @dev Called back by PoolManager.unlock() — executes the actual modify
+    /// @dev Dispatches on first 32-byte word: untagged (high addr value =
+    ///      first field of PoolKey is currency0 address) → single modify
+    ///      path (rebalance / provideLiquidity). Tagged with uint8 value ≤
+    ///      255 → recenter path. Real currency addresses are always > 255
+    ///      so the discriminant is unambiguous. Future-proofs additional
+    ///      tagged payloads without breaking the existing unlock encoding.
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         if (msg.sender != address(poolManager)) revert NotMailbox();
 
-        (PoolKey memory key, ModifyLiquidityParams memory params) = abi.decode(data, (PoolKey, ModifyLiquidityParams));
+        uint256 firstWord = uint256(bytes32(data[:32]));
+        // Any "tag" we use must be ≤ 255 to keep the discriminant unambiguous.
+        if (firstWord > 255) {
+            // Legacy/untagged: (PoolKey, ModifyLiquidityParams)
+            (PoolKey memory key, ModifyLiquidityParams memory params) = abi.decode(data, (PoolKey, ModifyLiquidityParams));
+            (BalanceDelta delta,) = poolManager.modifyLiquidity(key, params, "");
+            _settleDeltas(key, delta);
+            return "";
+        }
 
-        (BalanceDelta delta,) = poolManager.modifyLiquidity(key, params, "");
-        _settleDeltas(key, delta);
+        uint8 tag = uint8(firstWord);
+        if (tag == 1) {
+            // Recenter: two modifyLiquidity calls in one unlock
+            (, PoolKey memory key,
+             int24 oldTickLower, int24 oldTickUpper,
+             int24 newTickLower, int24 newTickUpper,
+             int128 liquidity)
+                = abi.decode(data, (uint8, PoolKey, int24, int24, int24, int24, int128));
 
-        return "";
+            // Step 1: remove existing liquidity at the old range
+            ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+                tickLower: oldTickLower,
+                tickUpper: oldTickUpper,
+                liquidityDelta: -int256(uint256(uint128(liquidity))),
+                salt: bytes32(0)
+            });
+            (BalanceDelta removeDelta,) = poolManager.modifyLiquidity(key, removeParams, "");
+
+            // Step 2: re-add at the new range with the same liquidity amount.
+            // Both modifyLiquidity calls share one unlock; the released tokens
+            // from step 1 fund step 2 internally. Net delta after both = the
+            // residual due to price drift between old and new range (if any).
+            ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+                tickLower: newTickLower,
+                tickUpper: newTickUpper,
+                liquidityDelta: int256(uint256(uint128(liquidity))),
+                salt: bytes32(0)
+            });
+            (BalanceDelta addDelta,) = poolManager.modifyLiquidity(key, addParams, "");
+
+            // Settle the COMBINED delta in a single round to minimize transfers.
+            // BalanceDelta addition via libraries isn't imported; instead settle
+            // each side individually.
+            _settleDeltas(key, removeDelta);
+            _settleDeltas(key, addDelta);
+
+            return "";
+        }
+
+        revert InvalidPayload();
     }
 
     /// @dev V4 sign convention (confirmed against PoolModifyLiquidityTest reference):
@@ -241,6 +291,17 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
         return isAdd ? int256(uint256(liquidity)) : -int256(uint256(liquidity));
     }
 
+    // ─── Errors specific to recenter ─────────────────────────────────────────
+    error InvalidLiquidity();
+    error InvalidTickRange();
+
+    event RecenterExecuted(
+        bytes32 indexed pairId,
+        int24 oldTickLower, int24 oldTickUpper,
+        int24 newTickLower, int24 newTickUpper,
+        int128 liquidity
+    );
+
     // ─── Agent-callable local LP path ────────────────────────────────────────
 
     /// @notice Authorized agents may direct this Relayer to modify LP positions
@@ -280,6 +341,48 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
         });
 
         _executeRebalance(rm);
+    }
+
+    /// @notice Atomic recenter: pull `liquidity` units out of the existing
+    ///         position at (oldLower, oldUpper) and immediately add them
+    ///         back at (newLower, newUpper) in a single transaction.
+    /// @dev    Both modifyLiquidity calls share one poolManager.unlock so the
+    ///         tokens released by the remove are consumed by the add — no
+    ///         brief window where the LP is unwound. If price moved between
+    ///         the original add and this recenter, the new position may end
+    ///         up unbalanced (more token0 or token1 than ideal); PoolManager
+    ///         settles via _settleDeltas as usual.
+    /// @dev    8.5.3 execution path. The agent's strategist proposes recenter
+    ///         actions when canonical pool's tick drifts outside our LP range.
+    function recenter(
+        bytes32 pairId,
+        int24 oldTickLower, int24 oldTickUpper,
+        int24 newTickLower, int24 newTickUpper,
+        int128 liquidity
+    ) external whenNotPaused nonReentrant {
+        if (!authorizedAgents[msg.sender]) revert NotAuthorizedAgent();
+        if (!_registered[pairId]) revert PoolNotRegistered();
+        if (liquidity <= 0) revert InvalidLiquidity();
+        if (oldTickLower >= oldTickUpper) revert InvalidTickRange();
+        if (newTickLower >= newTickUpper) revert InvalidTickRange();
+
+        PoolKey memory key = _poolKeys[pairId];
+
+        // Tagged encoding: first 32 bytes = tagged uint8. Untagged callers
+        // (provideLiquidity / _executeRebalance via unlock(abi.encode(key,
+        // params))) emit an Address as the first 32 bytes — addresses are
+        // always > 255 in practice, so the tag byte (≤ 1) cannot collide.
+        // See unlockCallback for the dispatch logic.
+        bytes memory payload = abi.encode(
+            uint8(1), // tag: recenter
+            key,
+            oldTickLower, oldTickUpper,
+            newTickLower, newTickUpper,
+            liquidity
+        );
+        poolManager.unlock(payload);
+
+        emit RecenterExecuted(pairId, oldTickLower, oldTickUpper, newTickLower, newTickUpper, liquidity);
     }
 
     // ─── Admin ───────────────────────────────────────────────────────────────

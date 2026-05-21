@@ -20,6 +20,7 @@ const mirrorHookAbi = parseAbi([
 // hook.dispatchRebalance + Hyperlane path.
 const relayerAbi = parseAbi([
   "function provideLiquidity(bytes32 pairId, int128 deltaToken0, int128 deltaToken1, int24 tickLower, int24 tickUpper) external",
+  "function recenter(bytes32 pairId, int24 oldTickLower, int24 oldTickUpper, int24 newTickLower, int24 newTickUpper, int128 liquidity) external",
 ]);
 
 function normalizePrivateKey(pk: string | undefined): `0x${string}` {
@@ -80,15 +81,8 @@ Output the CoordinatorDecision JSON only — no other text.`;
     // For now we record the intent but don't broadcast; a follow-up contract
     // change will add a local `recenterLocal(int24,int24)` entry point.
     if (proposal.action === "recenter") {
-      console.log(`  [coordinator] recenter proposed on ${proposal.recenterChain ?? "?"} (range [${proposal.newTickLower}, ${proposal.newTickUpper}]) — execution path is a contract-level TODO (8.5.3). Recording intent only.`);
-      return {
-        coordinatorDecision: decision,
-        executionResult: {
-          success: true,
-          timestamp: Date.now(),
-          error: "recenter execution path not yet on-chain — intent recorded",
-        },
-      };
+      const result = await _executeRecenter(proposal);
+      return { coordinatorDecision: decision, executionResult: result };
     }
     // 8.5.9 — Pick the execution path based on the target chain. Home-chain
     // (Base) actions go to Relayer.provideLiquidity directly. Sister-chain
@@ -146,6 +140,70 @@ async function _executeOnChain(
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     console.error("[Coordinator] execution failed:", error);
+    return { success: false, error, timestamp: Date.now() };
+  }
+}
+
+/// 8.5.3 — recenter execution path. Calls Relayer.recenter on the right
+/// chain's Relayer (home or sister) based on proposal.recenterChain.
+/// Atomic two-step modifyLiquidity (remove old + add new) inside one V4
+/// unlock callback, so the LP is never unwound between cycles.
+async function _executeRecenter(
+  proposal: NonNullable<MirrorState["rebalanceProposal"]>
+) {
+  const targetChain = proposal.recenterChain ?? "base";
+  // Resolve relayer + RPC for the target chain
+  const relayerEnvKey = targetChain === "base" ? "RELAYER_BASE" : "RELAYER_MAINNET";
+  const rpcEnvKey     = targetChain === "base" ? "ALCHEMY_BASE_URL" : "ALCHEMY_MAINNET_URL";
+  const relayerAddr   = process.env[relayerEnvKey];
+  const rpcUrl        = process.env[rpcEnvKey];
+  if (!relayerAddr || !rpcUrl) {
+    const msg = `Cannot recenter on ${targetChain} — ${relayerEnvKey} or ${rpcEnvKey} not set`;
+    console.warn(`[Coordinator] ${msg}`);
+    return { success: false, error: msg, timestamp: Date.now() };
+  }
+
+  try {
+    const account      = privateKeyToAccount(normalizePrivateKey(process.env.AGENT_PRIVATE_KEY));
+    const chain        = chainFor(targetChain);
+    const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+    const walletClient = createWalletClient({ chain, account, transport: http(rpcUrl) });
+    const pairId = (process.env.CANONICAL_PAIR_ID ??
+      "0x7a00c543412ae44415418950dc1ea26ae8977c50cbcec8035a5d99a911085b04") as `0x${string}`;
+
+    // Default to a sensible old range (caller-provided would be better, but the
+    // strategist's RebalanceProposal doesn't currently carry old ticks. Use
+    // the proposal's tickLower/tickUpper offset by tickSpacing as a heuristic —
+    // future improvement: extract the actual current range from on-chain position).
+    // For now require the proposal to carry both old + new explicitly via newFee
+    // field re-used as old-tick-spread, OR fall back to ±60 of the new range.
+    const newTickLower = proposal.newTickLower ?? -60;
+    const newTickUpper = proposal.newTickUpper ?? 60;
+    const oldTickLower = (proposal as any).oldTickLower ?? newTickLower - 600;
+    const oldTickUpper = (proposal as any).oldTickUpper ?? newTickUpper + 600;
+    const liquidity    = BigInt((proposal as any).recenterLiquidity ?? proposal.deltaToken0 ?? "0");
+    if (liquidity <= 0n) {
+      return {
+        success: false,
+        error: "Recenter requires positive liquidity amount — proposal carried zero",
+        timestamp: Date.now(),
+      };
+    }
+
+    const { request } = await publicClient.simulateContract({
+      account,
+      address:      relayerAddr as Address,
+      abi:          relayerAbi,
+      functionName: "recenter",
+      args:         [pairId, oldTickLower, oldTickUpper, newTickLower, newTickUpper, liquidity],
+      gas: 1_200_000n,
+    });
+    const txHash = await walletClient.writeContract(request);
+    console.log(`[Coordinator] recenter on ${targetChain} tx: ${txHash}`);
+    return { success: true, txHash, timestamp: Date.now() };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    console.error("[Coordinator] recenter failed:", error);
     return { success: false, error, timestamp: Date.now() };
   }
 }
