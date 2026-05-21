@@ -37,23 +37,26 @@ ACTION SELECTION (in order of priority):
    depth needed before rebalancing matters." Don't waste gas + bridge fees
    on dust.
 
-2. PROVIDE LIQUIDITY (new — auto-LP on deposit): If a SISTER chain (not
-   the home chain) has idleUsdcUsd + idleWethUsd > $10 AND competitiveness
-   is ≥ 10%, set action="rebalance" with:
+2. PROVIDE LIQUIDITY (auto-LP on deposit): If ANY chain has
+   idleUsdcUsd + idleWethUsd > $10 AND competitiveness is ≥ 10%, set
+   action="rebalance" with:
      - fromChain = the home chain (where dispatch originates)
-     - toChains = [that sister chain]
+     - toChains = [the chain whose Relayer holds the idle capital]
      - deltaToken0 / deltaToken1 = POSITIVE amounts equal to (idleUsdc, idleWeth)
-       so the Relayer modifyLiquidity adds them as LP at the current tick range
+       so the Relayer's modifyLiquidity adds them as LP at the current tick range
      - newFee = 3000 (or matching pool fee), newTickLower/Upper bracketing
        the chain's canonicalTick
      - reasoning should say "auto-LP idle deposit on chain X (USDC $A + WETH $B)"
-   This turns CCTP-arrived deposits into earning LP positions. Highest priority
-   when idle capital exists — every cycle of delay is a cycle of lost fees.
 
-   IMPORTANT: skip this for the home chain (Base today). The vault doesn't
-   currently have a local-LP-add entry point, so home-chain auto-LP is a
-   contract TODO. Only propose for sisters where idleUsdcUsd > 0 on the
-   Relayer.
+   Two execution paths the coordinator picks between based on the target:
+     - SISTER chain (Ethereum, BNB) — coordinator calls hook.dispatchRebalance
+       so Hyperlane delivers a message to the sister Relayer
+     - HOME chain (Base) — coordinator calls Relayer.provideLiquidity directly
+       on the Base Relayer (no Hyperlane), since the vault auto-forwards the
+       local-allocation USDC to it on deposit
+
+   Highest priority when idle capital exists — every cycle of delay is a
+   cycle of lost fees.
 
 3. RECENTER TICKS (8.5.3): If a chain has outOfRange=true AND competitiveness
    is ≥ 10% AND no idle capital pending, set action="recenter" with:

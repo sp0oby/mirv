@@ -13,6 +13,14 @@ const mirrorHookAbi = parseAbi([
   "function dispatchRebalance(int128 deltaToken0, int128 deltaToken1, uint24 newFee, int24 tickLower, int24 tickUpper) external payable",
 ]);
 
+// 8.5.9 — Home-chain auto-LP path. Calls Relayer.provideLiquidity directly
+// without going through Hyperlane. Used when the proposal's target chain is
+// the home chain (Base today). Sister-chain proposals still use the
+// hook.dispatchRebalance + Hyperlane path.
+const relayerAbi = parseAbi([
+  "function provideLiquidity(bytes32 pairId, int128 deltaToken0, int128 deltaToken1, int24 tickLower, int24 tickUpper) external",
+]);
+
 function normalizePrivateKey(pk: string | undefined): `0x${string}` {
   if (!pk) throw new Error("AGENT_PRIVATE_KEY not set");
   return (pk.startsWith("0x") ? pk : `0x${pk}`) as `0x${string}`;
@@ -82,7 +90,14 @@ Output the CoordinatorDecision JSON only — no other text.`;
         },
       };
     }
-    const result = await _executeOnChain(decision, proposal);
+    // 8.5.9 — Pick the execution path based on the target chain. Home-chain
+    // (Base) actions go to Relayer.provideLiquidity directly. Sister-chain
+    // actions go through hook.dispatchRebalance + Hyperlane.
+    const targetIsHome = proposal.toChains?.[0] === "base" || proposal.fromChain === "base";
+    const homeRelayer = process.env.RELAYER_BASE;
+    const result = (targetIsHome && homeRelayer)
+      ? await _executeHomeChainLp(homeRelayer, proposal)
+      : await _executeOnChain(decision, proposal);
     return { coordinatorDecision: decision, executionResult: result };
   }
 
@@ -131,6 +146,51 @@ async function _executeOnChain(
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     console.error("[Coordinator] execution failed:", error);
+    return { success: false, error, timestamp: Date.now() };
+  }
+}
+
+/// 8.5.9 — home-chain LP provider path. Calls Relayer.provideLiquidity
+/// directly (no Hyperlane). Used when the proposed action's target is Base.
+/// Pulls the canonical pair id from env so the Relayer's pool registry lookup
+/// matches what the hook + factory recorded.
+async function _executeHomeChainLp(
+  homeRelayer: string,
+  proposal: NonNullable<MirrorState["rebalanceProposal"]>
+) {
+  try {
+    const account = privateKeyToAccount(normalizePrivateKey(process.env.AGENT_PRIVATE_KEY));
+    const baseChain    = chainFor("base");
+    const publicClient = createPublicClient({ chain: baseChain, transport: http(process.env.ALCHEMY_BASE_URL) });
+    const walletClient = createWalletClient({ account, chain: baseChain, transport: http(process.env.ALCHEMY_BASE_URL) });
+
+    // The Relayer's registerPool stored the canonical pair id; we send it back
+    // here. The factory's pair id is what got registered.
+    const pairId = (process.env.CANONICAL_PAIR_ID ??
+      "0x7a00c543412ae44415418950dc1ea26ae8977c50cbcec8035a5d99a911085b04") as `0x${string}`;
+
+    const { request } = await publicClient.simulateContract({
+      account,
+      address: homeRelayer as Address,
+      abi: relayerAbi,
+      functionName: "provideLiquidity",
+      args: [
+        pairId,
+        BigInt(proposal.deltaToken0 ?? "0"),
+        BigInt(proposal.deltaToken1 ?? "0"),
+        proposal.newTickLower ?? -60,
+        proposal.newTickUpper ?? 60,
+      ],
+      gas: 800_000n,
+    });
+
+    const txHash = await walletClient.writeContract(request);
+    console.log(`[Coordinator] provideLiquidity (home chain) tx: ${txHash}`);
+
+    return { success: true, txHash, timestamp: Date.now() };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    console.error("[Coordinator] home-chain LP execution failed:", error);
     return { success: false, error, timestamp: Date.now() };
   }
 }

@@ -371,10 +371,15 @@ export async function runMonitorAgent(
   // on sister chains) and read its idle USDC + WETH balances. The strategist
   // uses these to propose provide-liquidity when deposits land but haven't yet
   // been turned into LP.
+  // 8.5.9 — Base now has its own Relayer too (deployed via the same Relayer
+  // contract, just on the home chain). The vault auto-forwards local share
+  // to it on each deposit. Falls back to reading the vault directly if
+  // RELAYER_BASE isn't configured (early-launch state where the relayer
+  // hasn't been deployed yet).
   const LP_PROVIDER_ENV_KEY: Record<Chain, string | undefined> = {
-    base:     "MIRROR_VAULT_BASE",   // home chain — vault holds idle USDC
-    ethereum: "RELAYER_MAINNET",     // sister chain — relayer holds inventory
-    bnb:      "RELAYER_BNB",          // not yet deployed; resolves to undefined
+    base:     process.env.RELAYER_BASE ? "RELAYER_BASE" : "MIRROR_VAULT_BASE",
+    ethereum: "RELAYER_MAINNET",
+    bnb:      "RELAYER_BNB",
   };
   const lpProviderEnv = LP_PROVIDER_ENV_KEY[chain];
   const lpProvider = lpProviderEnv ? (process.env[lpProviderEnv] ?? "") : "";
