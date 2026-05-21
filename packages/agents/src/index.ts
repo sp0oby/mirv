@@ -10,6 +10,7 @@ if ((process.stderr as any)._handle?.setBlocking) (process.stderr as any)._handl
 import { buildGraph }      from "./graph.js";
 import { disconnectRedis } from "./tools/redis.js";
 import { startHeartbeatServer } from "./heartbeat.js";
+import { runWithdrawalFulfiller } from "./withdrawal-fulfiller.js";
 import type { MirrorState } from "./state.js";
 
 const CYCLE_INTERVAL_MS = 45_000; // 45 seconds between cycles
@@ -60,6 +61,24 @@ async function main() {
       await graph.invoke(initialState);
     } catch (err) {
       console.error(`[Cycle ${cycle}] Unhandled error:`, err instanceof Error ? err.message : err);
+    }
+
+    // 8.5.10 — sweep pending async withdrawals each cycle. Independent of the
+    // rebalance graph; idempotent (vault's `fulfilled` flag guards against
+    // double-pay). Failures are logged + don't crash the cycle loop.
+    try {
+      const report = await runWithdrawalFulfiller();
+      if (report.fulfilled.length > 0) {
+        console.log(`[Cycle ${cycle}] withdrawals fulfilled: ${report.fulfilled.length}`);
+      }
+      if (report.pending.length > 0) {
+        console.log(`[Cycle ${cycle}] withdrawals needing cross-chain unwind: ${report.pending.length}`);
+      }
+      if (report.errors.length > 0) {
+        console.warn(`[Cycle ${cycle}] withdrawal-fulfiller errors:`, report.errors);
+      }
+    } catch (err) {
+      console.error(`[Cycle ${cycle}] withdrawal-fulfiller crashed:`, err instanceof Error ? err.message : err);
     }
 
     if (MAX_CYCLES > 0 && cycle >= MAX_CYCLES) {
