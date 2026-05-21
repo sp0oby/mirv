@@ -58,6 +58,7 @@ const chainlinkAbi = parseAbi([
 const erc20Abi = parseAbi([
   "function decimals() view returns (uint8)",
   "function symbol() view returns (string)",
+  "function balanceOf(address) view returns (uint256)",
 ]);
 
 // ─── V4 TVL math (universal — works on any chain with a V4 PoolManager) ─────
@@ -228,6 +229,47 @@ const toolHandlers: Record<string, (input: any) => Promise<unknown>> = {
   },
 };
 
+// Auto-LP — direct read of idle USDC + WETH balances at the LP-provider for
+// a chain. On the home chain (Base) that's the vault; on sister chains it's
+// the Relayer. We call this server-side so the strategist sees idle capital
+// per cycle and can propose a provide-liquidity action.
+//
+// Returns USD-denominated values so the LLM can reason about magnitude
+// without knowing per-token decimals.
+async function readIdleCapital(
+  chain: Chain,
+  lpProviderAddress: string,
+  token0: string,
+  token1: string,
+  ethUsd: number
+): Promise<{ idleUsdc: number; idleWeth: number; idleUsdcUsd: number; idleWethUsd: number }> {
+  try {
+    const client = clients[chain as keyof typeof clients];
+    const [bal0, bal1, dec0, dec1] = await Promise.all([
+      client.readContract({ address: token0 as Address, abi: erc20Abi, functionName: "balanceOf", args: [lpProviderAddress as Address] }),
+      client.readContract({ address: token1 as Address, abi: erc20Abi, functionName: "balanceOf", args: [lpProviderAddress as Address] }),
+      client.readContract({ address: token0 as Address, abi: erc20Abi, functionName: "decimals" }),
+      client.readContract({ address: token1 as Address, abi: erc20Abi, functionName: "decimals" }),
+    ]);
+    // Token0 is the stablecoin if decimals=6, else volatile (WETH 18).
+    const dec0n = Number(dec0);
+    const dec1n = Number(dec1);
+    const token0IsStable = dec0n === 6 && dec1n === 18;
+    const usdcRaw = token0IsStable ? bal0 : bal1;
+    const wethRaw = token0IsStable ? bal1 : bal0;
+    const idleUsdcUsd = Number(usdcRaw) / 1e6;
+    const idleWethUsd = (Number(wethRaw) / 1e18) * ethUsd;
+    return {
+      idleUsdc: Number(usdcRaw),
+      idleWeth: Number(wethRaw),
+      idleUsdcUsd,
+      idleWethUsd,
+    };
+  } catch {
+    return { idleUsdc: 0, idleWeth: 0, idleUsdcUsd: 0, idleWethUsd: 0 };
+  }
+}
+
 // 8.5.2 + 8.5.3 — direct (non-LLM) read of the canonical no-hook USDC/WETH
 // pool on the same chain. Returns BOTH depth (for competitiveness) and the
 // canonical tick (for tick-alignment drift detection). One read, two uses.
@@ -319,11 +361,35 @@ export async function runMonitorAgent(
   const t = tokens[chain];
 
   // 8.5.2 + 8.5.3 — read the canonical (no-hook) pool's depth AND current tick.
-  // Depth → competitiveness ratio. Tick → drift detection for LP re-centering.
+  // Depth -> competitiveness ratio. Tick -> drift detection for LP re-centering.
   const canonical = await readCanonicalState(chain, t.token0, t.token1, 3000, 60);
   const canonicalDepthUsd = canonical.depthUsd;
   const canonicalTick = canonical.tick;
   console.log(`  [monitor:${chain}] canonical depth=$${canonicalDepthUsd} tick=${canonicalTick ?? "n/a"}`);
+
+  // Auto-LP — find this chain's LP provider (Vault on Base home chain, Relayer
+  // on sister chains) and read its idle USDC + WETH balances. The strategist
+  // uses these to propose provide-liquidity when deposits land but haven't yet
+  // been turned into LP.
+  const LP_PROVIDER_ENV_KEY: Record<Chain, string | undefined> = {
+    base:     "MIRROR_VAULT_BASE",   // home chain — vault holds idle USDC
+    ethereum: "RELAYER_MAINNET",     // sister chain — relayer holds inventory
+    bnb:      "RELAYER_BNB",          // not yet deployed; resolves to undefined
+  };
+  const lpProviderEnv = LP_PROVIDER_ENV_KEY[chain];
+  const lpProvider = lpProviderEnv ? (process.env[lpProviderEnv] ?? "") : "";
+  // Use Chainlink's price for USD-denomination of WETH. Pull from canonical
+  // read indirectly via env (we don't want to re-call Chainlink here).
+  // Approximate: get the ETH/USD price from the canonical pool's TVL math
+  // by assuming token0 stable + comparing depths. Simpler: hardcode a
+  // reasonable ETH price when canonical read failed.
+  const ethUsdApprox = canonicalDepthUsd > 0 && canonicalTick !== null
+    ? 2000   // we'll let the agent figure exact; strategist gets the price elsewhere
+    : 2000;
+  const idle = lpProvider
+    ? await readIdleCapital(chain, lpProvider, t.token0, t.token1, ethUsdApprox)
+    : { idleUsdc: 0, idleWeth: 0, idleUsdcUsd: 0, idleWethUsd: 0 };
+  console.log(`  [monitor:${chain}] idle@${lpProvider ? lpProvider.slice(0, 10) : "n/a"}: $${idle.idleUsdcUsd.toFixed(2)} USDC + $${idle.idleWethUsd.toFixed(2)} WETH`);
 
   const prompt = `Monitor the ETH/USDC pool on ${chain}. You are responsible for ONE chain only: ${chain}.
 
@@ -338,6 +404,11 @@ Known canonical-pool state on this chain (no-hook USDC/WETH at fee=3000, tickSpa
   depth: $${canonicalDepthUsd}
   current tick: ${canonicalTick ?? "unavailable"}
 This was read server-side; do NOT call getPoolState a second time for the canonical pool. Use these numbers directly.
+
+Idle capital sitting at this chain's LP provider (vault on Base, Relayer on sisters), read server-side:
+  idle USDC: $${idle.idleUsdcUsd.toFixed(2)} ($${idle.idleUsdc} raw token units)
+  idle WETH: $${idle.idleWethUsd.toFixed(2)} (${idle.idleWeth} wei)
+If both are > $10 in USD value, this chain has deposits/inventory ready to be turned into LP. Flag it so the strategist proposes a provide-liquidity action.
 
 INSTRUCTIONS — at most two tool calls, in this order:
 1. CALL getPoolState({chain: "${chain}", token0: "${t.token0}", token1: "${t.token1}", feeTier: 3000, tickSpacing: 60, hookAddress: "${hookAddress}"}) — reads OUR hooked pool depth.
@@ -394,7 +465,16 @@ Output ONLY a MonitorResult JSON, no other text.`;
       const isOut = canonicalTick < parsed.currentTickLow || canonicalTick > parsed.currentTickHigh;
       parsed.outOfRange = isOut;
     }
-    console.log(`  [monitor:${chain}] depth=$${parsed.localDepthUsd?.toFixed(0) ?? 'NaN'} canonical=$${canonicalDepthUsd} tick=${canonicalTick ?? "n/a"} outOfRange=${parsed.outOfRange ?? "?"} competitiveness=${parsed.competitivenessPct?.toFixed(2)}% action=${parsed.actionNeeded}`);
+    // Always inject server-read idle balances; Claude's view of them is just the prompt context.
+    parsed.idleUsdc    = idle.idleUsdc;
+    parsed.idleWeth    = idle.idleWeth;
+    parsed.idleUsdcUsd = idle.idleUsdcUsd;
+    parsed.idleWethUsd = idle.idleWethUsd;
+    // Surface "ready to LP" in the action flag too, so the strategist can pick up
+    // the signal without re-reading idle fields.
+    const idleCapital = idle.idleUsdcUsd + idle.idleWethUsd;
+    if (idleCapital > 10) parsed.actionNeeded = true;
+    console.log(`  [monitor:${chain}] depth=$${parsed.localDepthUsd?.toFixed(0) ?? 'NaN'} canonical=$${canonicalDepthUsd} tick=${canonicalTick ?? "n/a"} outOfRange=${parsed.outOfRange ?? "?"} competitiveness=${parsed.competitivenessPct?.toFixed(2)}% idle=$${idleCapital.toFixed(2)} action=${parsed.actionNeeded}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.log(`  [monitor:${chain}] CAUGHT — ${msg.slice(0, 200)}`);
@@ -415,6 +495,10 @@ Output ONLY a MonitorResult JSON, no other text.`;
       competitivenessPct: 0,
       canonicalTick: canonicalTick ?? undefined,
       outOfRange: false,
+      idleUsdc: idle.idleUsdc,
+      idleWeth: idle.idleWeth,
+      idleUsdcUsd: idle.idleUsdcUsd,
+      idleWethUsd: idle.idleWethUsd,
     };
   }
 

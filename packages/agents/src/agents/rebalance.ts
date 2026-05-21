@@ -13,6 +13,13 @@ export async function runRebalanceAgent(state: MirrorState): Promise<Partial<Mir
   const totalTvl = monitors.reduce((sum, m) => sum + m.localDepthUsd, 0);
   const minCompetitiveness = Math.min(...monitors.map((m) => m.competitivenessPct ?? 0));
   const outOfRangeChains = monitors.filter((m) => m.outOfRange === true);
+  const idleByChain = monitors.map((m) => ({
+    chain: m.chain,
+    idleUsdcUsd: m.idleUsdcUsd ?? 0,
+    idleWethUsd: m.idleWethUsd ?? 0,
+    totalIdleUsd: (m.idleUsdcUsd ?? 0) + (m.idleWethUsd ?? 0),
+  }));
+  const chainsWithIdleCapital = idleByChain.filter((c) => c.totalIdleUsd > 10);
 
   const prompt = `Monitor results from this cycle:
 ${JSON.stringify(monitors, null, 2)}
@@ -21,6 +28,7 @@ Total mirrored TVL: $${totalTvl.toLocaleString()}
 Max single move: 2% = $${(totalTvl * 0.02).toLocaleString()}
 Min competitiveness across chains: ${minCompetitiveness.toFixed(2)}%
 Chains with LP out of range: ${outOfRangeChains.length === 0 ? "none" : outOfRangeChains.map((m) => m.chain).join(", ")}
+Chains with idle capital ready to LP: ${chainsWithIdleCapital.length === 0 ? "none" : chainsWithIdleCapital.map((c) => `${c.chain}=$${c.totalIdleUsd.toFixed(0)}`).join(", ")}
 
 ACTION SELECTION (in order of priority):
 
@@ -29,17 +37,35 @@ ACTION SELECTION (in order of priority):
    depth needed before rebalancing matters." Don't waste gas + bridge fees
    on dust.
 
-2. RECENTER TICKS (8.5.3): If a chain has outOfRange=true AND competitiveness
-   is ≥ 10%, set action="recenter" with:
+2. PROVIDE LIQUIDITY (new — auto-LP on deposit): If a SISTER chain (not
+   the home chain) has idleUsdcUsd + idleWethUsd > $10 AND competitiveness
+   is ≥ 10%, set action="rebalance" with:
+     - fromChain = the home chain (where dispatch originates)
+     - toChains = [that sister chain]
+     - deltaToken0 / deltaToken1 = POSITIVE amounts equal to (idleUsdc, idleWeth)
+       so the Relayer modifyLiquidity adds them as LP at the current tick range
+     - newFee = 3000 (or matching pool fee), newTickLower/Upper bracketing
+       the chain's canonicalTick
+     - reasoning should say "auto-LP idle deposit on chain X (USDC $A + WETH $B)"
+   This turns CCTP-arrived deposits into earning LP positions. Highest priority
+   when idle capital exists — every cycle of delay is a cycle of lost fees.
+
+   IMPORTANT: skip this for the home chain (Base today). The vault doesn't
+   currently have a local-LP-add entry point, so home-chain auto-LP is a
+   contract TODO. Only propose for sisters where idleUsdcUsd > 0 on the
+   Relayer.
+
+3. RECENTER TICKS (8.5.3): If a chain has outOfRange=true AND competitiveness
+   is ≥ 10% AND no idle capital pending, set action="recenter" with:
      - recenterChain = the out-of-range chain
      - newTickLower / newTickUpper = a range that brackets the chain's
        canonicalTick (e.g. tickLower = floor((canonicalTick - 4200) / 60) * 60,
        tickUpper = floor((canonicalTick + 4200) / 60) * 60)
-   This shifts our LP back into range so we earn fees again. No cross-chain
-   USDC movement, just a local LP re-add.
+   No cross-chain USDC movement, just a local LP re-add.
 
-3. CROSS-CHAIN REBALANCE: If no recenter needed and depth is competitive,
-   calculate the optimal cross-chain rebalance based on relative imbalance.
+4. CROSS-CHAIN REBALANCE: If no provide-liquidity needed, no recenter
+   needed, and depth is competitive, calculate the optimal cross-chain
+   rebalance based on relative imbalance.
 
 Estimate amounts in token units (USDC has 6 decimals, WETH has 18 decimals).
 Output the RebalanceProposal JSON only — no other text.`;

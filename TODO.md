@@ -684,6 +684,34 @@ the integrations above land so we audit close-to-final bytecode.
 - [ ] Engagement starts ~4 weeks before target mainnet date
 - [ ] Bug bounty live on Cantina or Immunefi at audit completion
 
+### 8.5.9 Auto-LP on deposit 🟡 sister-chain path shipped; home-chain path is a contract TODO
+
+**Why:** Without this, a user deposit triggers CCTP bridge but the USDC + WETH
+that arrive on each chain just sit idle. They earn zero fees until someone
+manually triggers an LP add. The protocol's depositor flow doesn't actually
+work without it.
+
+What's now in place:
+- [x] Monitor agent reads idle USDC + WETH balances at the LP-provider for
+      each chain (Vault on Base, Relayer on ETH). New `readIdleCapital()`
+      helper, server-side (no Claude tokens spent per cycle).
+- [x] `MonitorResult` carries `idleUsdc`, `idleWeth`, `idleUsdcUsd`, `idleWethUsd`.
+- [x] If idle USD value > $10 on any chain, `actionNeeded` flips true.
+- [x] Strategist prompt: new "PROVIDE LIQUIDITY" action priority that proposes
+      a rebalance with positive deltas equal to the idle balances, tick range
+      bracketing canonicalTick. Wired into the existing dispatch path —
+      Relayer's `_executeRebalance` already handles the modifyLiquidity.
+
+Remaining (home-chain path):
+- [ ] **Vault.provideLiquidityLocal(int24,int24)** — Base side has no Relayer;
+      the vault holds the USDC. Need a new vault entry point that calls
+      poolManager.unlock and adds USDC + WETH as LP at the specified tick range.
+      Requires the vault to acquire WETH (treasury swap or hold-as-inventory).
+- [ ] Add Base side to monitor's lp-provider map once vault.provideLiquidityLocal exists.
+- [ ] Fork test: deposit → CCTP delivery on sister → agent dispatches → LP added → fees accrue
+
+---
+
 ### 8.5.8 Treasury multisig + governance 🟡 migration script shipped, awaiting Safe + run
 
 **Why:** Single-EOA treasury is fine for testnet, unacceptable for mainnet.

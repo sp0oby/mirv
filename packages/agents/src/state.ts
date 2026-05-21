@@ -31,6 +31,15 @@ export interface MonitorResult {
   canonicalTick?:       number; // current tick of canonical (no-hook) pool
   ourTick?:             number; // current tick of mirv's hooked pool
   outOfRange?:          boolean; // canonical tick outside [currentTickLow, currentTickHigh]
+  // Idle-capital detection (auto-LP on deposit). Reads the USDC + WETH balances
+  // of the place that would provide LP on this chain (Vault on Base, Relayer
+  // on sister chains). If either token has idle balance large enough to
+  // matter, the strategist proposes a provide-liquidity rebalance so the
+  // deposit doesn't sit unproductive.
+  idleUsdc?:            number; // USDC raw units sitting at the LP-provider for this chain
+  idleWeth?:            number; // WETH wei sitting at the LP-provider
+  idleUsdcUsd?:         number; // USD value of the idle USDC (decimal)
+  idleWethUsd?:         number; // USD value of the idle WETH at current price
 }
 
 // ─── Rebalance proposal ───────────────────────────────────────────────────────
