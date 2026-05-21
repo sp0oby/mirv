@@ -522,7 +522,16 @@ contract MirrorVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     ///      domain or a chain awaiting CCTP support) keep their USDC local.
     function _splitAndBridge(uint256 totalAmount) internal {
         uint256 len = enabledDomains.length;
-        if (len == 0) return; // pre-launch: no chains configured yet, USDC stays local
+        // Pre-launch / no-sisters state: nothing to bridge. If a localLpRelayer
+        // is configured, forward the entire deposit to it; otherwise the USDC
+        // stays in the vault as before.
+        if (len == 0) {
+            if (localLpRelayer != address(0)) {
+                IERC20(asset()).safeTransfer(localLpRelayer, totalAmount);
+                emit LocalLpForwarded(localLpRelayer, totalAmount);
+            }
+            return;
+        }
 
         for (uint256 i; i < len; ++i) {
             uint32 domain = enabledDomains[i];
