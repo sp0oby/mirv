@@ -470,6 +470,71 @@ contract RelayerTest is Test {
         relayer.recenter(pairId, -120, 120, 60, 60, int128(1000));
     }
 
+    // ─── bridgeUsdcHome (8.5.10 cross-chain withdrawal unwind) ───────────────
+
+    function test_setBridgeConfigOwnerOnly() public {
+        address messenger = makeAddr("cctp-messenger");
+        address usdc      = makeAddr("usdc");
+        bytes32 recipient = bytes32(uint256(uint160(makeAddr("vault"))));
+
+        // Non-owner reverts
+        vm.prank(alice);
+        vm.expectRevert();
+        relayer.setBridgeConfig(messenger, usdc, 6, recipient);
+
+        // Owner can set
+        vm.prank(owner);
+        relayer.setBridgeConfig(messenger, usdc, 6, recipient);
+        assertEq(address(relayer.bridgeMessenger()), messenger);
+        assertEq(relayer.bridgeUsdc(), usdc);
+        assertEq(uint256(relayer.bridgeHomeCctpDomain()), 6);
+        assertEq(relayer.bridgeHomeRecipient(), recipient);
+    }
+
+    function test_bridgeUsdcHomeRevertsForUnauthorizedAgent() public {
+        vm.prank(alice);
+        vm.expectRevert(Relayer.NotAuthorizedAgent.selector);
+        relayer.bridgeUsdcHome(1_000_000);
+    }
+
+    function test_bridgeUsdcHomeRevertsOnZeroAmount() public {
+        address agentEoa = makeAddr("agent");
+        vm.prank(owner);
+        relayer.setAgentAuthorization(agentEoa, true);
+
+        vm.prank(agentEoa);
+        vm.expectRevert(Relayer.ZeroAmount.selector);
+        relayer.bridgeUsdcHome(0);
+    }
+
+    function test_bridgeUsdcHomeRevertsWhenNotConfigured() public {
+        address agentEoa = makeAddr("agent");
+        vm.prank(owner);
+        relayer.setAgentAuthorization(agentEoa, true);
+
+        // Bridge config never set
+        vm.prank(agentEoa);
+        vm.expectRevert(Relayer.BridgeNotConfigured.selector);
+        relayer.bridgeUsdcHome(1_000_000);
+    }
+
+    function test_bridgeUsdcHomeRevertsWhenPaused() public {
+        address agentEoa = makeAddr("agent");
+        address messenger = makeAddr("cctp-messenger");
+        address usdc      = makeAddr("usdc");
+        bytes32 recipient = bytes32(uint256(uint160(makeAddr("vault"))));
+
+        vm.startPrank(owner);
+        relayer.setAgentAuthorization(agentEoa, true);
+        relayer.setBridgeConfig(messenger, usdc, 6, recipient);
+        relayer.pause();
+        vm.stopPrank();
+
+        vm.prank(agentEoa);
+        vm.expectRevert(); // EnforcedPause from OZ Pausable
+        relayer.bridgeUsdcHome(1_000_000);
+    }
+
     function test_recenterRevertsWhenPaused() public {
         address agentEoa = makeAddr("agent");
         bytes32 pairId = keccak256("p");

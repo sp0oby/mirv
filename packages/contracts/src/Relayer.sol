@@ -18,6 +18,15 @@ import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol"
 import {CurrencySettler} from "uniswap-hooks/src/utils/CurrencySettler.sol";
 import {IMessageRecipient} from "./interfaces/IHyperlane.sol";
 
+/// @dev Subset of Circle's CCTP TokenMessenger used by the Relayer to bridge
+///      USDC back to the vault on the home chain. Identical signature to the
+///      one MirrorVault uses on the outbound (home → sister) side.
+interface ICctpTokenMessenger {
+    function depositForBurn(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken)
+        external
+        returns (uint64 nonce);
+}
+
 /// @title Relayer
 /// @notice Receives Hyperlane messages from sister MirrorHooks and executes
 ///         liquidity position adjustments on the local V4 pool.
@@ -96,6 +105,19 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
     /// @dev pairId => PoolKey registered on this chain
     mapping(bytes32 => PoolKey) private _poolKeys;
     mapping(bytes32 => bool) private _registered;
+
+    // ─── CCTP bridge-home config (8.5.10) ────────────────────────────────────
+    /// @dev Circle CCTP TokenMessenger on THIS chain (for bridging USDC back
+    ///      to the vault). Settable via setBridgeConfig so we can deploy the
+    ///      Relayer before knowing the canonical CCTP address (e.g. on a new chain).
+    ICctpTokenMessenger public bridgeMessenger;
+    /// @dev USDC token address on this chain — the asset we burn via CCTP.
+    address public bridgeUsdc;
+    /// @dev Hyperlane domain of the home chain (where the vault lives), as
+    ///      interpreted by CCTP (NB: CCTP domain != Hyperlane domain in general).
+    uint32 public bridgeHomeCctpDomain;
+    /// @dev Left-padded bytes32(vault) — the mint recipient on the home chain.
+    bytes32 public bridgeHomeRecipient;
 
     // ─── Constructor ─────────────────────────────────────────────────────────
     /// @param _poolManager V4 PoolManager on this chain
@@ -295,11 +317,29 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
     error InvalidLiquidity();
     error InvalidTickRange();
 
+    // ─── Errors + events for cross-chain withdrawal unwind (8.5.10) ──────────
+    error BridgeNotConfigured();
+    error InsufficientUsdcBalance();
+    error ZeroAmount();
+
     event RecenterExecuted(
         bytes32 indexed pairId,
         int24 oldTickLower, int24 oldTickUpper,
         int24 newTickLower, int24 newTickUpper,
         int128 liquidity
+    );
+
+    event UsdcBridgedHome(
+        uint256 amount,
+        uint32 destinationDomain,
+        bytes32 mintRecipient,
+        uint64 cctpNonce
+    );
+    event BridgeConfigUpdated(
+        address indexed messenger,
+        address indexed usdc,
+        uint32 destinationDomain,
+        bytes32 mintRecipient
     );
 
     // ─── Agent-callable local LP path ────────────────────────────────────────
@@ -385,7 +425,49 @@ contract Relayer is IMessageRecipient, Ownable, Pausable, ReentrancyGuard {
         emit RecenterExecuted(pairId, oldTickLower, oldTickUpper, newTickLower, newTickUpper, liquidity);
     }
 
+    // ─── Agent-callable CCTP bridge-home (8.5.10) ────────────────────────────
+
+    /// @notice Burn USDC from this Relayer via CCTP, with the home-chain vault
+    ///         as the mint recipient. Used to fund vault withdrawals when local
+    ///         USDC is insufficient (closes the async-withdraw unwind path).
+    /// @dev    Agent calls this after a `provideLiquidity(-deltas)` removed LP
+    ///         and released USDC into this Relayer's balance. ~20 min later
+    ///         (CCTP attestation), the vault has the USDC and the agent's
+    ///         next cycle fulfills the queued withdrawal.
+    function bridgeUsdcHome(uint256 amount) external whenNotPaused nonReentrant {
+        if (!authorizedAgents[msg.sender]) revert NotAuthorizedAgent();
+        if (amount == 0) revert ZeroAmount();
+        if (address(bridgeMessenger) == address(0) || bridgeUsdc == address(0) || bridgeHomeRecipient == bytes32(0)) {
+            revert BridgeNotConfigured();
+        }
+        if (IERC20(bridgeUsdc).balanceOf(address(this)) < amount) revert InsufficientUsdcBalance();
+
+        IERC20(bridgeUsdc).forceApprove(address(bridgeMessenger), amount);
+        uint64 nonce = bridgeMessenger.depositForBurn(
+            amount, bridgeHomeCctpDomain, bridgeHomeRecipient, bridgeUsdc
+        );
+
+        emit UsdcBridgedHome(amount, bridgeHomeCctpDomain, bridgeHomeRecipient, nonce);
+    }
+
     // ─── Admin ───────────────────────────────────────────────────────────────
+
+    /// @notice Configure (or rotate) the CCTP bridge-home parameters. Same
+    ///         pattern as MirrorVault.addChain — owner-only, immutable per-call
+    ///         but rotatable via re-calling. Set all four to enable the bridge;
+    ///         set messenger to address(0) to disable.
+    function setBridgeConfig(
+        address messenger,
+        address usdc,
+        uint32 cctpDomain,
+        bytes32 mintRecipient
+    ) external onlyOwner {
+        bridgeMessenger      = ICctpTokenMessenger(messenger);
+        bridgeUsdc           = usdc;
+        bridgeHomeCctpDomain = cctpDomain;
+        bridgeHomeRecipient  = mintRecipient;
+        emit BridgeConfigUpdated(messenger, usdc, cctpDomain, mintRecipient);
+    }
 
     /// @notice Authorized AI agent addresses (Coordinator hot wallet) that may
     ///         call `provideLiquidity` directly. Separate from `authorizedSenders`
