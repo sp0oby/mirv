@@ -684,6 +684,50 @@ the integrations above land so we audit close-to-final bytecode.
 - [ ] Engagement starts ~4 weeks before target mainnet date
 - [ ] Bug bounty live on Cantina or Immunefi at audit completion
 
+### 8.5.10 Async withdrawal fulfillment 🟡 sweep + tracker + bridge contract shipped; orchestration TODO
+
+**Why:** Without an agent fulfillment loop, async withdrawals sit in the
+vault's queue forever until the user manually cancels at 24h. Plus when
+vault has < assetsOwed in local USDC, the agent has to pull liquidity
+from a sister chain + CCTP it back — multi-cycle coordination.
+
+Shipped:
+- [x] `runWithdrawalFulfiller()` sweep: scans last hour of WithdrawRequested
+      events, fulfills any with enough vault USDC via `vault.fulfillWithdraw`
+- [x] Wired into the cycle loop in index.ts (runs every cycle, idempotent)
+- [x] Pure `decideFulfillment()` function with 10 vitest cases covering
+      boundary conditions
+- [x] Relayer.bridgeUsdcHome — CCTP-burns USDC back to vault, with
+      owner-configurable bridge config (messenger, USDC, domain, mint
+      recipient). 5 vitest cases.
+- [x] Agent unwind-state tracker (in-memory, 30-min CCTP attestation
+      window with auto-eviction). 10 vitest cases.
+- [x] Fulfiller checks the tracker before re-initiating an unwind
+- [x] One-shot warning when `MIRROR_VAULT_BASE` env is unset (no per-cycle log spam)
+
+Remaining (final orchestration sub-task):
+- [ ] **Coordinator-side execution of the unwind sequence.** Today the
+      fulfiller MARKS "in-progress" but doesn't actually call the sister
+      Relayer's `provideLiquidity(-deltas)` + `bridgeUsdcHome(amount)`.
+      The contract surface + state tracker are ready; the missing piece
+      is the agent code that:
+        a. Picks a sister chain to unwind from (today only ETH; future:
+           pick the one with most available USDC)
+        b. Computes liquidity-to-remove deltas from current pool state
+           + the amount needed
+        c. Sends both txs (or marks the intent for an admin to send
+           manually during the testnet bootstrap window)
+- [ ] Fork test: deposit on Base → CCTP arrives at ETH Relayer → LP
+      provided → user calls requestWithdraw with cross-chain unwind
+      required → agent triggers unwind → CCTP attests → fulfillWithdraw
+      completes. Full end-to-end.
+
+Manual operational fallback today: an admin can call
+`provideLiquidity(-deltas)` + `bridgeUsdcHome(amount)` via cast for any
+queued withdrawal that's been pending > 1 hour.
+
+---
+
 ### 8.5.9 Auto-LP on deposit 🟡 sister-chain path shipped; home-chain path is a contract TODO
 
 **Why:** Without this, a user deposit triggers CCTP bridge but the USDC + WETH
